@@ -1,0 +1,25 @@
+{
+  "name": "ucs-marker-software",
+  "version": "0.1.0",
+  "private": true,
+  "description": "UCS Automatic Marking System — online marking of student exam scripts with AI assistance.",
+  "workspaces": [
+    "packages/*",
+    "apps/marker/api",
+    "apps/marker/frontend",
+    "infra/db/marker"
+  ],
+  "scripts": {
+    "dev:api": "npm --workspace apps/marker/api run dev",
+    "dev:frontend": "npm --workspace apps/marker/frontend run dev",
+    "dev:extractor": "cd services/extractor && python -m uvicorn app:app --reload --port 8081",
+    "build": "npm --workspaces --if-present run build",
+    "test": "npm --workspaces --if-present run test",
+    "lint": "npm --workspaces --if-present run lint",
+    "migrate:up": "npm --workspace infra/db/marker run migrate:up",
+    "migrate:down": "npm --workspace infra/db/marker run migrate:down"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: marker_postgres
+    environment:
+      POSTGRES_USER: marker
+      POSTGRES_PASSWORD: marker
+      POSTGRES_DB: marker_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - marker_pgdata:/var/lib/postgresql/data
+
+  extractor:
+    build: ./services/extractor
+    container_name: marker_extractor
+    ports:
+      - "8081:8081"
+    environment:
+      STORAGE_BACKEND: local
+      STORAGE_DIR: /app/storage
+    volumes:
+      - ./storage:/app/storage
+
+volumes:
+  marker_pgdata:
