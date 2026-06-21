@@ -85,14 +85,16 @@ def _localise(uri: str) -> Path:
     return storage.localise_for_read(uri)
 
 
+def _gemini_model_name() -> str:
+    return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+
 def _gemini_client():
-    import google.generativeai as genai
-    api_key = os.environ.get("GEMINI_API_KEY")
+    from google import genai
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
-    genai.configure(api_key=api_key)
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-    return genai.GenerativeModel(model_name)
+    return genai.Client(api_key=api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -175,16 +177,21 @@ def ocr(req: OcrRequest):
         raise HTTPException(status_code=422, detail=f"Cannot access image: {exc}")
 
     try:
-        model = _gemini_client()
-        import google.generativeai as genai
-        image_part = {"mime_type": "image/png", "data": image_bytes}
+        client = _gemini_client()
+        from google.genai import types
         prompt = (
             "You are a handwriting transcription assistant. "
             "Transcribe exactly what is written in the image. "
             "Preserve line breaks. Do not add commentary, corrections, or formatting. "
             "If the image is blank or illegible, return an empty string."
         )
-        response = model.generate_content([prompt, image_part])
+        response = client.models.generate_content(
+            model=_gemini_model_name(),
+            contents=[
+                prompt,
+                types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
+            ],
+        )
         text = response.text.strip() if response.text else ""
     except HTTPException:
         raise
