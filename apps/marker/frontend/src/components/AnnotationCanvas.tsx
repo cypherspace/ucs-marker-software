@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Arrow } from 'react-konva';
+import type { KonvaEventObject } from 'konva/lib/Node';
 import useImage from 'use-image';
 import type { Annotation, AnnotationData, AnnotationTool } from '@marker/shared-types';
 
@@ -127,7 +128,7 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
     notify(next);
   }
 
-  function getPointer(e: { target: { getStage: () => { getPointerPosition: () => { x: number; y: number } | null } } }) {
+  function getPointer(e: KonvaEventObject<MouseEvent>) {
     const pos = e.target.getStage()?.getPointerPosition();
     if (!pos) return null;
     return { x: pos.x / scale, y: pos.y / scale };

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import useImage from 'use-image';
 import { Stage, Layer, Image as KonvaImage, Rect, Text } from 'react-konva';
+import type { KonvaEventObject } from 'konva/lib/Node';
 import type { ClipRegion, NameZone } from '@marker/shared-types';
 
 type RegionType = 'question' | 'ms' | 'name_zone';
@@ -55,7 +56,7 @@ export function CoordinatePicker({ pageImageUrl, page, existingRegions = [], onR
   const displayW = imgWidth * scale;
   const displayH = imgHeight * scale;
 
-  function getPos(e: { target: { getStage: () => { getPointerPosition: () => { x: number; y: number } | null } } }) {
+  function getPos(e: KonvaEventObject<MouseEvent>) {
     const pos = e.target.getStage()?.getPointerPosition();
     if (!pos) return null;
     return { x: pos.x / scale, y: pos.y / scale };
