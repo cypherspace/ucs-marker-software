@@ -111,6 +111,40 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
   }
 });
 
+// Render a page of a script PDF to PNG for the CoordinatePicker admin UI.
+// Proxies the Python extractor. Looks the script up by id so callers can't ask
+// the extractor to read arbitrary files. max_width is fixed high so the render
+// scale is always 150/72 — the frontend relies on that to convert the regions
+// it draws (image pixels) back to PDF points before saving.
+router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    const script = await db('student_scripts')
+      .where({ id: req.params.scriptId })
+      .first<{ original_pdf_url: string }>();
+    if (!script) { res.status(404).json({ error: 'Script not found', code: 'NOT_FOUND' }); return; }
+
+    const page = Number(req.query.page ?? 1);
+    if (!Number.isInteger(page) || page < 1) {
+      res.status(400).json({ error: 'Invalid page', code: 'BAD_REQUEST' }); return;
+    }
+
+    const resp = await fetch(`${config.extractorUrl}/render`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pdf_uri: storage.rawUri(script.original_pdf_url), page_number: page, max_width: 2000 }),
+    });
+    if (!resp.ok) {
+      console.error('Extractor render error:', await resp.text());
+      res.status(502).json({ error: 'Render failed', code: 'EXTRACTOR_ERROR' }); return;
+    }
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.send(Buffer.from(await resp.arrayBuffer()));
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Get a signed/local URL for a script's full PDF
 router.get('/clips/:id/script', requireAuth, async (req, res, next) => {
   try {

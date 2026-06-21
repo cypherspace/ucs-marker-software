@@ -6,7 +6,7 @@ import type { ClipRegion, NameZone } from '@marker/shared-types';
 
 type RegionType = 'question' | 'ms' | 'name_zone';
 
-interface DrawnRegion {
+export interface DrawnRegion {
   id: string;
   type: RegionType;
   page: number;
@@ -16,6 +16,13 @@ interface DrawnRegion {
   height: number;
   label?: string;
 }
+
+// The extractor renders pages at RENDER_DPI; the picker works in those image
+// pixels, but clip coordinates are stored in PDF points (72 DPI).
+const RENDER_DPI = 150;
+const PT_PER_PX = 72 / RENDER_DPI;
+const toPt = (n: number) => Math.round(n * PT_PER_PX * 100) / 100;
+const toPx = (n: number) => n / PT_PER_PX;
 
 interface Props {
   // URL to rendered PDF page image from extractor /render endpoint
@@ -198,11 +205,31 @@ export function CoordinatePicker({ pageImageUrl, page, existingRegions = [], onR
   );
 }
 
-// Helpers to convert DrawnRegion arrays to the DB format
+// Helpers to convert DrawnRegion arrays (image pixels) to the DB format (PDF points)
 export function toClipRegions(regions: DrawnRegion[], type: 'question' | 'ms'): ClipRegion[] {
-  return regions.filter((r) => r.type === type).map(({ page, x, y, width, height }) => ({ page, x, y, width, height }));
+  return regions.filter((r) => r.type === type).map(({ page, x, y, width, height }) => ({
+    page, x: toPt(x), y: toPt(y), width: toPt(width), height: toPt(height),
+  }));
 }
 
 export function toNameZones(regions: DrawnRegion[]): NameZone[] {
-  return regions.filter((r) => r.type === 'name_zone').map(({ page, x, y, width, height }) => ({ page, x, y, width, height }));
+  return regions.filter((r) => r.type === 'name_zone').map(({ page, x, y, width, height }) => ({
+    page, x: toPt(x), y: toPt(y), width: toPt(width), height: toPt(height),
+  }));
+}
+
+// Inverse: rebuild DrawnRegions (image pixels) from stored question regions (PDF points)
+export function fromQuestionRegions(q: {
+  clip_coordinates?: ClipRegion[] | null;
+  ms_clip_coordinates?: ClipRegion[] | null;
+  name_zones?: NameZone[] | null;
+}): DrawnRegion[] {
+  const mk = (type: RegionType) => (r: ClipRegion): DrawnRegion => ({
+    id: nanoid(), type, page: r.page, x: toPx(r.x), y: toPx(r.y), width: toPx(r.width), height: toPx(r.height),
+  });
+  return [
+    ...(q.clip_coordinates ?? []).map(mk('question')),
+    ...(q.ms_clip_coordinates ?? []).map(mk('ms')),
+    ...(q.name_zones ?? []).map(mk('name_zone')),
+  ];
 }

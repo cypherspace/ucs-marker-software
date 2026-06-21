@@ -3,8 +3,16 @@ import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import type { ExamQuestion } from '@marker/shared-types';
+import {
+  CoordinatePicker,
+  toClipRegions,
+  toNameZones,
+  fromQuestionRegions,
+  type DrawnRegion,
+} from '../components/CoordinatePicker';
 
 type SetupTab = 'scripts' | 'questions' | 'assign';
+type RegionType = 'question' | 'ms' | 'name_zone';
 
 export function ExamSetup() {
   const { id } = useParams<{ id: string }>();
@@ -47,6 +55,33 @@ export function ExamSetup() {
     }),
     onSuccess: () => {
       setNewQ({ question_number: '', max_marks: '' });
+      qc.invalidateQueries({ queryKey: ['questions', id] });
+    },
+  });
+
+  // ── Region drawing (CoordinatePicker) ─────────────────────────────────────
+  const [editingQuestion, setEditingQuestion] = useState<ExamQuestion | null>(null);
+  const [editorRegions, setEditorRegions] = useState<DrawnRegion[]>([]);
+  const [editorPage, setEditorPage] = useState(1);
+  const [editorType, setEditorType] = useState<RegionType>('question');
+  const [templateScriptId, setTemplateScriptId] = useState<string>('');
+
+  function openRegionEditor(q: ExamQuestion) {
+    setEditingQuestion(q);
+    setEditorRegions(fromQuestionRegions(q));
+    setEditorPage(1);
+    setEditorType('question');
+    setTemplateScriptId(scripts[0]?.id ?? '');
+  }
+
+  const saveRegionsMutation = useMutation({
+    mutationFn: () => api.updateQuestion(id!, editingQuestion!.id, {
+      clip_coordinates: toClipRegions(editorRegions, 'question'),
+      ms_clip_coordinates: toClipRegions(editorRegions, 'ms'),
+      name_zones: toNameZones(editorRegions),
+    }),
+    onSuccess: () => {
+      setEditingQuestion(null);
       qc.invalidateQueries({ queryKey: ['questions', id] });
     },
   });
@@ -179,11 +214,19 @@ export function ExamSetup() {
                   <span className="w-12 font-medium text-slate-700">Q{q.question_number}</span>
                   <span className="text-sm text-slate-500">{q.max_marks} marks</span>
                   <div className="ml-auto flex items-center gap-2 text-xs">
-                    {q.clip_coordinates ? (
+                    {q.clip_coordinates?.length ? (
                       <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">Regions set</span>
                     ) : (
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">No regions yet</span>
                     )}
+                    <button
+                      onClick={() => openRegionEditor(q)}
+                      disabled={scripts.length === 0}
+                      title={scripts.length === 0 ? 'Upload a script first to draw on' : 'Draw clip regions'}
+                      className="rounded bg-indigo-600 px-2 py-1 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                    >
+                      Draw regions
+                    </button>
                   </div>
                 </div>
               ))}
@@ -244,6 +287,86 @@ export function ExamSetup() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Region drawing modal */}
+      {editingQuestion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setEditingQuestion(null)}>
+          <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+            {/* Modal header / toolbar */}
+            <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 px-4 py-2.5">
+              <span className="font-medium text-slate-700">Draw regions — Q{editingQuestion.question_number}</span>
+
+              <div className="ml-2 flex items-center gap-1 rounded-lg border border-slate-200 p-0.5 text-xs">
+                {([['question', 'Question'], ['ms', 'Mark scheme'], ['name_zone', 'Name zone']] as [RegionType, string][]).map(([t, label]) => (
+                  <button
+                    key={t}
+                    onClick={() => setEditorType(t)}
+                    className={`rounded px-2.5 py-1 font-medium transition-colors ${editorType === t ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1 text-xs text-slate-600">
+                <span>Page</span>
+                <button onClick={() => setEditorPage((p) => Math.max(1, p - 1))} className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200">−</button>
+                <span className="w-6 text-center font-medium">{editorPage}</span>
+                <button onClick={() => setEditorPage((p) => p + 1)} className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200">+</button>
+              </div>
+
+              {scripts.length > 1 && (
+                <select
+                  value={templateScriptId}
+                  onChange={(e) => setTemplateScriptId(e.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 text-xs"
+                  title="Script used as the layout template"
+                >
+                  {scripts.map((s) => <option key={s.id} value={s.id}>Script {s.student_number}</option>)}
+                </select>
+              )}
+
+              <button onClick={() => setEditingQuestion(null)} className="ml-auto text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+
+            {/* Canvas */}
+            <div className="min-h-0 flex-1 overflow-auto p-4">
+              {templateScriptId ? (
+                <CoordinatePicker
+                  pageImageUrl={api.renderScriptPageUrl(templateScriptId, editorPage)}
+                  page={editorPage}
+                  existingRegions={editorRegions}
+                  onRegionsChange={setEditorRegions}
+                  activeType={editorType}
+                />
+              ) : (
+                <div className="text-sm text-slate-500">No script available to draw on.</div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center gap-3 border-t border-slate-200 px-4 py-2.5">
+              <span className="text-xs text-slate-500">
+                Drag to draw a {editorType === 'name_zone' ? 'name zone (blacked out)' : editorType === 'ms' ? 'mark-scheme region' : 'question region'}.
+                Regions are saved in PDF points.
+              </span>
+              {saveRegionsMutation.error && (
+                <span className="text-xs text-red-600">{(saveRegionsMutation.error as Error).message}</span>
+              )}
+              <div className="ml-auto flex gap-2">
+                <button onClick={() => setEditingQuestion(null)} className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100">Cancel</button>
+                <button
+                  onClick={() => saveRegionsMutation.mutate()}
+                  disabled={saveRegionsMutation.isPending}
+                  className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {saveRegionsMutation.isPending ? 'Saving…' : 'Save regions'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

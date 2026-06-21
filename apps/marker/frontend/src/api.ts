@@ -78,6 +78,8 @@ export const api = {
   },
   triggerClipping: (examId: string) =>
     http<ApiSuccess<{ clips_created: number }>>(`${A}/exams/${examId}/clip`, { method: 'POST' }),
+  // URL for an <img> — renders a script PDF page to PNG via the extractor
+  renderScriptPageUrl: (scriptId: string, page: number) => `${A}/scripts/${scriptId}/render?page=${page}`,
 
   // Assignments
   listAssignments: (examId: string) => http<ApiSuccess<MarkingAssignment[]>>(`${A}/${examId}/assignments`),
