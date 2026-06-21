@@ -30,10 +30,12 @@ app.get('/health', (_req, res) => {
 
 app.use('/auth', authRouter);
 app.use('/admin/v1', adminRouter);
-app.use('/api/v1', examsRouter);
+// Mount routers with specific paths (/my-exams, /clips/*, /exams/*, /marks, /compare)
+// before examsRouter, whose greedy `/:id` would otherwise shadow them.
 app.use('/api/v1', scriptsRouter);
 app.use('/api/v1', marksRouter);
 app.use('/api/v1', aiRouter);
+app.use('/api/v1', examsRouter);
 
 // `/files/?u=<uri>` — resolve storage URI to bytes (GCS: 302 redirect; local: stream)
 app.get('/files/', async (req, res, next) => {

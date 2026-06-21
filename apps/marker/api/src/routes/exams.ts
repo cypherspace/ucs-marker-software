@@ -5,6 +5,12 @@ import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 
 const router = Router();
 
+// jsonb columns must be serialised before insert/update — node-pg otherwise
+// renders JS arrays as Postgres array literals, which jsonb rejects.
+function jsonbOrNull(value: unknown): string | null {
+  return value == null ? null : JSON.stringify(value);
+}
+
 const CreateExamSchema = z.object({
   name: z.string().min(1).max(200),
   subject: z.string().max(100).optional(),
@@ -113,7 +119,14 @@ router.post('/:id/questions', requireAuth, requireRole(['teacher', 'admin']), as
     });
     const body = QuestionSchema.parse(req.body);
     const [question] = await db('exam_questions')
-      .insert({ exam_id: req.params.id, ...body })
+      .insert({
+        exam_id: req.params.id,
+        question_number: body.question_number,
+        max_marks: body.max_marks,
+        clip_coordinates: jsonbOrNull(body.clip_coordinates),
+        ms_clip_coordinates: jsonbOrNull(body.ms_clip_coordinates),
+        name_zones: jsonbOrNull(body.name_zones),
+      })
       .returning('*');
     res.status(201).json({ data: question });
   } catch (err) {
@@ -141,9 +154,15 @@ router.patch('/:examId/questions/:questionId', requireAuth, requireRole(['teache
       })).nullable().optional(),
     });
     const body = UpdateSchema.parse(req.body);
+    const patch: Record<string, unknown> = {};
+    if (body.question_number !== undefined) patch.question_number = body.question_number;
+    if (body.max_marks !== undefined) patch.max_marks = body.max_marks;
+    if (body.clip_coordinates !== undefined) patch.clip_coordinates = jsonbOrNull(body.clip_coordinates);
+    if (body.ms_clip_coordinates !== undefined) patch.ms_clip_coordinates = jsonbOrNull(body.ms_clip_coordinates);
+    if (body.name_zones !== undefined) patch.name_zones = jsonbOrNull(body.name_zones);
     const [updated] = await db('exam_questions')
       .where({ id: req.params.questionId, exam_id: req.params.examId })
-      .update(body)
+      .update(patch)
       .returning('*');
     if (!updated) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
     res.json({ data: updated });
