@@ -37,7 +37,14 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
       .where('sc.question_id', req.params.questionId)
       .whereNull('sm.id')
       .orderBy('sc.created_at')
-      .first<{ id: string; clip_image_url: string; script_id: string; question_id: string }>();
+      // Select sc columns explicitly: an implicit `select *` over the join lets
+      // sm.id (NULL here) shadow sc.id, returning a null clip id.
+      .first<{ id: string; clip_image_url: string; script_id: string; question_id: string }>(
+        'sc.id as id',
+        'sc.clip_image_url as clip_image_url',
+        'sc.script_id as script_id',
+        'sc.question_id as question_id',
+      );
 
     if (!clip) {
       res.json({ data: null, meta: { message: 'All clips marked' } }); return;

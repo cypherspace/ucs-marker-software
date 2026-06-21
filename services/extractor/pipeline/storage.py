@@ -21,9 +21,19 @@ class Storage(ABC):
         """Return the raw URI as stored in the DB."""
 
 
+# Repo root: services/extractor/pipeline/storage.py -> up 3 levels.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
 class LocalStorage(Storage):
     def __init__(self, root: str) -> None:
-        self.root = Path(root)
+        # Anchor a relative STORAGE_DIR to the repo root, not the process cwd —
+        # `npm run dev:extractor` cd's into services/extractor, which would
+        # otherwise put clips somewhere the API cannot serve them.
+        root_path = Path(root)
+        if not root_path.is_absolute():
+            root_path = (REPO_ROOT / root_path).resolve()
+        self.root = root_path
         self.root.mkdir(parents=True, exist_ok=True)
 
     def write(self, key: str, data: bytes) -> str:
