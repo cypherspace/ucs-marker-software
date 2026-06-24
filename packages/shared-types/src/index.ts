@@ -34,6 +34,7 @@ export interface Exam {
   exam_series: string | null;
   lead_teacher_id: string;
   status: ExamStatus;
+  mark_scheme_pdf_url: string | null;
   created_at: string;
 }
 
@@ -57,6 +58,7 @@ export interface ExamQuestion {
   clip_coordinates: ClipRegion[] | null;
   ms_clip_coordinates: ClipRegion[] | null;
   name_zones: NameZone[] | null;
+  ms_clip_image_url: string | null;
   created_at: string;
 }
 

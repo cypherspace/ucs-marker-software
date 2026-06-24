@@ -46,6 +46,24 @@ router.post('/exams/:id/scripts', requireAuth, requireRole(['teacher', 'admin'])
   }
 });
 
+// Upload the mark scheme PDF for an exam (one per exam)
+router.post('/exams/:id/mark-scheme', requireAuth, requireRole(['teacher', 'admin']), upload.single('mark_scheme'), async (req, res, next) => {
+  try {
+    const file = req.file as Express.Multer.File | undefined;
+    if (!file) { res.status(422).json({ error: 'No file uploaded', code: 'NO_FILE' }); return; }
+
+    const exam = await db('exams').where({ id: req.params.id }).first();
+    if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return; }
+
+    const key = `mark-schemes/${req.params.id}.pdf`;
+    const uri = await storage.write(key, file.buffer);
+    await db('exams').where({ id: req.params.id }).update({ mark_scheme_pdf_url: uri });
+    res.status(201).json({ data: { mark_scheme_pdf_url: uri } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // List scripts for an exam
 router.get('/exams/:id/scripts', requireAuth, async (req, res, next) => {
   try {
@@ -102,10 +120,39 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
         .onConflict(['script_id', 'question_id']).merge(['clip_image_url']);
     }
 
+    // Clip the mark scheme too, if one has been uploaded and any question has
+    // MS regions defined. One MS clip per question, stored on the question.
+    const exam = await db('exams').where({ id: req.params.id }).first<{ mark_scheme_pdf_url: string | null }>();
+    let msClipsCreated = 0;
+    const msQuestions = questions.filter((q) => Array.isArray(q.ms_clip_coordinates) && q.ms_clip_coordinates.length);
+    if (exam?.mark_scheme_pdf_url && msQuestions.length) {
+      try {
+        const msResp = await fetch(`${config.extractorUrl}/clip-mark-scheme`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            ms_pdf_url: storage.rawUri(exam.mark_scheme_pdf_url),
+            questions: msQuestions.map((q) => ({ id: q.id, ms_clip_coordinates: q.ms_clip_coordinates })),
+          }),
+        });
+        if (msResp.ok) {
+          const msResult = (await msResp.json()) as { clips: { question_id: string; ms_clip_image_url: string }[] };
+          for (const c of msResult.clips) {
+            await db('exam_questions').where({ id: c.question_id }).update({ ms_clip_image_url: c.ms_clip_image_url });
+          }
+          msClipsCreated = msResult.clips.length;
+        } else {
+          console.error('Mark scheme clip error:', await msResp.text());
+        }
+      } catch (msErr) {
+        console.error('Mark scheme clipping failed:', msErr);
+      }
+    }
+
     // Update exam status to marking
     await db('exams').where({ id: req.params.id }).update({ status: 'marking' });
 
-    res.json({ data: { clips_created: result.clips.length } });
+    res.json({ data: { clips_created: result.clips.length, ms_clips_created: msClipsCreated } });
   } catch (err) {
     next(err);
   }

@@ -54,8 +54,11 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
     const question = await db('exam_questions').where({ id: req.params.questionId }).first();
     // Generate a public URL for the clip image
     const clipUrl = await storage.publicUrl(clip.clip_image_url);
-    // MS URL if clip coordinates exist
+    // Mark-scheme clip URL, if one was produced during clipping
     let msUrl: string | null = null;
+    if (question?.ms_clip_image_url) {
+      msUrl = await storage.publicUrl(question.ms_clip_image_url);
+    }
     // Total remaining
     const remaining = await db('script_clips as sc')
       .leftJoin('script_marks as sm', function () {

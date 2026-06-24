@@ -62,6 +62,25 @@ class ClipScriptsResponse(BaseModel):
     clips: list[ClipResult]
 
 
+class MsQuestionInput(BaseModel):
+    id: str
+    ms_clip_coordinates: list[dict[str, Any]] | None = None
+
+
+class ClipMarkSchemeRequest(BaseModel):
+    ms_pdf_url: str
+    questions: list[MsQuestionInput]
+
+
+class MsClipResult(BaseModel):
+    question_id: str
+    ms_clip_image_url: str
+
+
+class ClipMarkSchemeResponse(BaseModel):
+    clips: list[MsClipResult]
+
+
 class OcrRequest(BaseModel):
     image_url: str
 
@@ -165,6 +184,48 @@ def clip_scripts(req: ClipScriptsRequest):
             ))
 
     return ClipScriptsResponse(clips=clips)
+
+
+@app.post("/clip-mark-scheme", response_model=ClipMarkSchemeResponse)
+def clip_mark_scheme(req: ClipMarkSchemeRequest):
+    """Clip each question's mark-scheme region from the exam's mark scheme PDF.
+
+    One MS clip per question (not per script). No name zones — mark schemes
+    contain no student identifiers.
+    """
+    try:
+        pdf_path = _localise(req.ms_pdf_url)
+    except Exception as exc:
+        logger.error("Failed to localise mark scheme %s: %s", req.ms_pdf_url, exc)
+        raise HTTPException(status_code=422, detail=f"Cannot access mark scheme PDF: {exc}")
+
+    clips: list[MsClipResult] = []
+    for question in req.questions:
+        coords = question.ms_clip_coordinates
+        if not coords:
+            continue
+
+        try:
+            png_bytes = clip_question(
+                pdf_path=pdf_path,
+                coords=coords,
+                name_zones=[],
+                out_key=f"ms-clips/{question.id}.png",
+            )
+        except Exception as exc:
+            logger.error("MS clip failed question=%s: %s", question.id, exc)
+            raise HTTPException(status_code=500, detail=f"MS clipping failed for question {question.id}: {exc}")
+
+        key = f"ms-clips/{question.id}.png"
+        try:
+            uri = storage.write(key, png_bytes)
+        except Exception as exc:
+            logger.error("Storage write failed key=%s: %s", key, exc)
+            raise HTTPException(status_code=500, detail=f"Storage write failed: {exc}")
+
+        clips.append(MsClipResult(question_id=question.id, ms_clip_image_url=uri))
+
+    return ClipMarkSchemeResponse(clips=clips)
 
 
 @app.post("/ocr", response_model=OcrResponse)

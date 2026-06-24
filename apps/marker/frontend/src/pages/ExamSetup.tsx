@@ -43,7 +43,20 @@ export function ExamSetup() {
 
   const clipMutation = useMutation({
     mutationFn: () => api.triggerClipping(id!),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['exam', id] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['exam', id] });
+      qc.invalidateQueries({ queryKey: ['questions', id] });
+    },
+  });
+
+  // ── Mark scheme upload ────────────────────────────────────────────────────
+  const [msFile, setMsFile] = useState<File | null>(null);
+  const msUploadMutation = useMutation({
+    mutationFn: () => api.uploadMarkScheme(id!, msFile!),
+    onSuccess: () => {
+      setMsFile(null);
+      qc.invalidateQueries({ queryKey: ['exam', id] });
+    },
   });
 
   // ── Question definition ───────────────────────────────────────────────────
@@ -142,6 +155,30 @@ export function ExamSetup() {
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
             >
               {uploadMutation.isPending ? 'Uploading…' : 'Upload Scripts'}
+            </button>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <h2 className="font-medium text-slate-700 mb-3">Mark Scheme</h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Upload the mark scheme PDF. After drawing each question's <strong>mark scheme</strong> region,
+              "Generate Clips" produces a per-question MS image that markers can toggle on while marking.
+            </p>
+            {exam?.mark_scheme_pdf_url && (
+              <p className="mb-2 text-sm text-green-700">✓ Mark scheme uploaded</p>
+            )}
+            <input
+              type="file"
+              accept=".pdf"
+              onChange={(e) => setMsFile(e.target.files?.[0] ?? null)}
+              className="mb-3 block text-sm text-slate-600"
+            />
+            <button
+              onClick={() => msUploadMutation.mutate()}
+              disabled={!msFile || msUploadMutation.isPending}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {msUploadMutation.isPending ? 'Uploading…' : exam?.mark_scheme_pdf_url ? 'Replace Mark Scheme' : 'Upload Mark Scheme'}
             </button>
           </div>
 

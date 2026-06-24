@@ -77,7 +77,15 @@ export const api = {
     });
   },
   triggerClipping: (examId: string) =>
-    http<ApiSuccess<{ clips_created: number }>>(`${A}/exams/${examId}/clip`, { method: 'POST' }),
+    http<ApiSuccess<{ clips_created: number; ms_clips_created: number }>>(`${A}/exams/${examId}/clip`, { method: 'POST' }),
+  uploadMarkScheme: (examId: string, file: File) => {
+    const form = new FormData();
+    form.append('mark_scheme', file);
+    return http<ApiSuccess<{ mark_scheme_pdf_url: string }>>(`${A}/exams/${examId}/mark-scheme`, {
+      method: 'POST',
+      body: form,
+    });
+  },
   // URL for an <img> — renders a script PDF page to PNG via the extractor
   renderScriptPageUrl: (scriptId: string, page: number) => `${A}/scripts/${scriptId}/render?page=${page}`,
 
