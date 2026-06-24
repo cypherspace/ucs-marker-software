@@ -251,11 +251,18 @@ export function ExamSetup() {
                   <span className="w-12 font-medium text-slate-700">Q{q.question_number}</span>
                   <span className="text-sm text-slate-500">{q.max_marks} marks</span>
                   <div className="ml-auto flex items-center gap-2 text-xs">
-                    {q.clip_coordinates?.length ? (
-                      <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">Regions set</span>
-                    ) : (
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">No regions yet</span>
-                    )}
+                    {(() => {
+                      const coords: { page: number }[] = q.clip_coordinates ?? [];
+                      if (coords.length === 0) {
+                        return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">No regions yet</span>;
+                      }
+                      const pages = [...new Set(coords.map((r) => r.page))].sort((a, b) => a - b);
+                      return (
+                        <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">
+                          {coords.length} region{coords.length !== 1 ? 's' : ''} · p.{pages.join(', ')}
+                        </span>
+                      );
+                    })()}
                     <button
                       onClick={() => openRegionEditor(q)}
                       disabled={scripts.length === 0}
@@ -347,12 +354,22 @@ export function ExamSetup() {
                 ))}
               </div>
 
-              <div className="flex items-center gap-1 text-xs text-slate-600">
-                <span>Page</span>
-                <button onClick={() => setEditorPage((p) => Math.max(1, p - 1))} className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200">−</button>
-                <span className="w-6 text-center font-medium">{editorPage}</span>
-                <button onClick={() => setEditorPage((p) => p + 1)} className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200">+</button>
-              </div>
+              {(() => {
+                const pagesWithRegions = new Set(editorRegions.map((r) => r.page));
+                return (
+                  <div className="flex items-center gap-1 text-xs text-slate-600">
+                    <span>Page</span>
+                    <button onClick={() => setEditorPage((p) => Math.max(1, p - 1))} className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200">−</button>
+                    <span className="relative w-6 text-center font-medium">
+                      {editorPage}
+                      {pagesWithRegions.has(editorPage) && (
+                        <span className="absolute -top-0.5 -right-1 w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                      )}
+                    </span>
+                    <button onClick={() => setEditorPage((p) => p + 1)} className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200">+</button>
+                  </div>
+                );
+              })()}
 
               {scripts.length > 1 && (
                 <select
@@ -387,7 +404,7 @@ export function ExamSetup() {
             <div className="flex items-center gap-3 border-t border-slate-200 px-4 py-2.5">
               <span className="text-xs text-slate-500">
                 Drag to draw a {editorType === 'name_zone' ? 'name zone (blacked out)' : editorType === 'ms' ? 'mark-scheme region' : 'question region'}.
-                Regions are saved in PDF points.
+                Navigate pages to add regions across multiple pages — all are stitched into one image at clip time.
               </span>
               {saveRegionsMutation.error && (
                 <span className="text-xs text-red-600">{(saveRegionsMutation.error as Error).message}</span>

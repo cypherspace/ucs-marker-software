@@ -168,28 +168,36 @@ export function CoordinatePicker({ pageImageUrl, page, existingRegions = [], onR
         </Stage>
       </div>
 
-      {/* Region list */}
-      <div className="w-48 flex-shrink-0">
-        <div className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Regions on page {page}</div>
-        <div className="space-y-1">
-          {regions.filter((r) => r.page === page).map((r) => (
-            <div key={r.id} className="flex items-center justify-between rounded bg-slate-50 border border-slate-200 px-2 py-1 text-xs">
-              <span style={{ color: TYPE_COLORS[r.type] }} className="font-medium">
-                {TYPE_LABELS[r.type]}{r.label ? `: ${r.label}` : ''}
-              </span>
-              <button
-                onClick={() => removeRegion(r.id)}
-                className="text-slate-400 hover:text-red-500 ml-2"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-          {regions.filter((r) => r.page === page).length === 0 && (
+      {/* Region list — all pages */}
+      <div className="w-52 flex-shrink-0 flex flex-col gap-2">
+        <div className="text-xs font-medium text-slate-500 uppercase tracking-wide">All regions</div>
+        <div className="space-y-1 flex-1">
+          {regions.length === 0 && (
             <div className="text-xs text-slate-400">Draw to add regions.</div>
           )}
+          {[...regions].sort((a, b) => a.page - b.page || a.type.localeCompare(b.type)).map((r) => (
+            <div
+              key={r.id}
+              className={`flex items-center justify-between rounded border px-2 py-1 text-xs ${r.page === page ? 'bg-slate-50 border-slate-200' : 'bg-white border-slate-100 opacity-60'}`}
+            >
+              <span style={{ color: TYPE_COLORS[r.type] }} className="font-medium truncate">
+                {TYPE_LABELS[r.type]}{r.label ? `: ${r.label}` : ''}
+                <span className="text-slate-400 font-normal ml-1">p.{r.page}</span>
+              </span>
+              <button onClick={() => removeRegion(r.id)} className="text-slate-400 hover:text-red-500 ml-2 flex-shrink-0">✕</button>
+            </div>
+          ))}
         </div>
-        <div className="mt-3 text-xs text-slate-400 leading-tight">
+        {regions.length > 0 && (
+          <div className="text-xs text-slate-500 border-t border-slate-100 pt-2">
+            {regions.filter(r => r.type === 'question').length}Q
+            {' · '}{regions.filter(r => r.type === 'ms').length}MS
+            {' · '}{regions.filter(r => r.type === 'name_zone').length}NZ
+            {' across '}
+            {new Set(regions.map(r => r.page)).size} page(s)
+          </div>
+        )}
+        <div className="text-xs text-slate-400 leading-tight border-t border-slate-100 pt-2">
           <div className="flex items-center gap-1.5 mb-1">
             <span className="w-2 h-2 rounded-full bg-blue-600 inline-block" /> Question clip
           </div>
