@@ -3,6 +3,7 @@ import multer from 'multer';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { storage, isGcsUri } from '../services/storage.js';
+import { isDriveUri, fileIdFromUri, getDownloadUrl, uploadFile, createExamFolder } from '../services/drive.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { createReadStream, existsSync, statSync } from 'node:fs';
@@ -29,12 +30,28 @@ router.post('/exams/:id/scripts', requireAuth, requireRole(['teacher', 'admin'])
       .first<{ n: string }>();
     const startIndex = Number(existingCount?.n ?? 0) + 1;
 
+    // Ensure Drive folder exists for this exam
+    let driveFolderId: string | null = exam.drive_folder_id ?? null;
+    if (exam.use_drive_storage && !driveFolderId) {
+      try {
+        driveFolderId = await createExamFolder(exam.lead_teacher_id, exam.name);
+        await db('exams').where({ id: req.params.id }).update({ drive_folder_id: driveFolderId });
+      } catch (err) {
+        console.warn('[drive] Folder creation failed during upload:', (err as Error).message);
+      }
+    }
+
     const inserted: { id: string; student_number: string }[] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const studentNumber = String(startIndex + i).padStart(3, '0');
-      const key = `scripts/${req.params.id}/${studentNumber}.pdf`;
-      const uri = await storage.write(key, file.buffer);
+      let uri: string;
+      if (exam.use_drive_storage && driveFolderId) {
+        uri = await uploadFile(exam.lead_teacher_id, driveFolderId, `${studentNumber}.pdf`, file.buffer, 'application/pdf');
+      } else {
+        const key = `scripts/${req.params.id}/${studentNumber}.pdf`;
+        uri = await storage.write(key, file.buffer);
+      }
       const [row] = await db('student_scripts')
         .insert({ exam_id: req.params.id, student_number: studentNumber, original_pdf_url: uri })
         .returning(['id', 'student_number']);
@@ -79,18 +96,25 @@ router.get('/exams/:id/scripts', requireAuth, async (req, res, next) => {
 // Trigger clipping job — calls Python extractor
 router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
   try {
+    const exam = await db('exams').where({ id: req.params.id }).first();
+    if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return; }
     const scripts = await db('student_scripts').where({ exam_id: req.params.id });
     const questions = await db('exam_questions').where({ exam_id: req.params.id });
 
     if (!scripts.length) { res.status(422).json({ error: 'No scripts uploaded', code: 'NO_SCRIPTS' }); return; }
     if (!questions.length) { res.status(422).json({ error: 'No questions defined', code: 'NO_QUESTIONS' }); return; }
 
-    // Resolve public URIs for the extractor (GCS raw URIs or local paths)
-    const scriptPayload = scripts.map((s) => ({
-      id: s.id,
-      student_number: s.student_number,
-      pdf_url: storage.rawUri(s.original_pdf_url),
+    // Resolve URIs for the extractor; Drive URIs need a temporary download URL
+    const scriptPayload = await Promise.all(scripts.map(async (s) => {
+      let pdfUrl: string;
+      if (isDriveUri(s.original_pdf_url)) {
+        pdfUrl = await getDownloadUrl(exam.lead_teacher_id, fileIdFromUri(s.original_pdf_url));
+      } else {
+        pdfUrl = storage.rawUri(s.original_pdf_url);
+      }
+      return { id: s.id, student_number: s.student_number, pdf_url: pdfUrl };
     }));
+
     const questionPayload = questions.map((q) => ({
       id: q.id,
       clip_coordinates: q.clip_coordinates ?? [],
@@ -109,6 +133,25 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
     }
     const result = (await resp.json()) as { clips: { script_id: string; question_id: string; clip_image_url: string }[] };
 
+    // Re-upload clip PNGs to Drive if exam uses Drive storage
+    if (exam.use_drive_storage && exam.drive_folder_id && result.clips.length) {
+      for (const c of result.clips) {
+        try {
+          const imgBytes = await storage.read(c.clip_image_url);
+          const driveUri = await uploadFile(
+            exam.lead_teacher_id,
+            exam.drive_folder_id,
+            `clip_${c.question_id}_${c.script_id}.png`,
+            imgBytes,
+            'image/png',
+          );
+          c.clip_image_url = driveUri;
+        } catch (err) {
+          console.error('[drive] Clip upload failed:', (err as Error).message);
+        }
+      }
+    }
+
     // Save clips to DB
     if (result.clips.length) {
       await db('script_clips')
@@ -122,7 +165,6 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
 
     // Clip the mark scheme too, if one has been uploaded and any question has
     // MS regions defined. One MS clip per question, stored on the question.
-    const exam = await db('exams').where({ id: req.params.id }).first<{ mark_scheme_pdf_url: string | null }>();
     let msClipsCreated = 0;
     const msQuestions = questions.filter((q) => Array.isArray(q.ms_clip_coordinates) && q.ms_clip_coordinates.length);
     if (exam?.mark_scheme_pdf_url && msQuestions.length) {
@@ -165,9 +207,10 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
 // it draws (image pixels) back to PDF points before saving.
 router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
   try {
-    const script = await db('student_scripts')
-      .where({ id: req.params.scriptId })
-      .first<{ original_pdf_url: string }>();
+    const script = await db('student_scripts as ss')
+      .join('exams as e', 'e.id', 'ss.exam_id')
+      .where('ss.id', req.params.scriptId)
+      .first<{ original_pdf_url: string; lead_teacher_id: string }>();
     if (!script) { res.status(404).json({ error: 'Script not found', code: 'NOT_FOUND' }); return; }
 
     const page = Number(req.query.page ?? 1);
@@ -175,10 +218,17 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
       res.status(400).json({ error: 'Invalid page', code: 'BAD_REQUEST' }); return;
     }
 
+    let pdfUri: string;
+    if (isDriveUri(script.original_pdf_url)) {
+      pdfUri = await getDownloadUrl(script.lead_teacher_id, fileIdFromUri(script.original_pdf_url));
+    } else {
+      pdfUri = storage.rawUri(script.original_pdf_url);
+    }
+
     const resp = await fetch(`${config.extractorUrl}/render`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ pdf_uri: storage.rawUri(script.original_pdf_url), page_number: page, max_width: 2000 }),
+      body: JSON.stringify({ pdf_uri: pdfUri, page_number: page, max_width: 2000 }),
     });
     if (!resp.ok) {
       console.error('Extractor render error:', await resp.text());
@@ -197,17 +247,23 @@ router.get('/clips/:id/script', requireAuth, async (req, res, next) => {
   try {
     const clip = await db('script_clips as sc')
       .join('student_scripts as ss', 'ss.id', 'sc.script_id')
+      .join('exams as e', 'e.id', 'ss.exam_id')
       .where('sc.id', req.params.id)
-      .first<{ original_pdf_url: string }>();
+      .first<{ original_pdf_url: string; lead_teacher_id: string }>();
     if (!clip) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
-    const url = await storage.publicUrl(clip.original_pdf_url);
+    let url: string;
+    if (isDriveUri(clip.original_pdf_url)) {
+      url = await getDownloadUrl(clip.lead_teacher_id, fileIdFromUri(clip.original_pdf_url));
+    } else {
+      url = await storage.publicUrl(clip.original_pdf_url);
+    }
     res.json({ data: { url } });
   } catch (err) {
     next(err);
   }
 });
 
-// Serve local file contents via /files/<rel-path>
+// Serve local file contents via /files/*?u=<uri>
 router.get('/files/*', async (req, res, next) => {
   try {
     const uri = String(req.query.u ?? '');

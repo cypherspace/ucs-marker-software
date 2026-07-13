@@ -3,8 +3,17 @@ from __future__ import annotations
 
 import os
 import tempfile
+import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
+
+
+def _download_http(url: str) -> Path:
+    """Download an HTTP/HTTPS URL to a temp file and return its path."""
+    suffix = '.pdf' if '.pdf' in url.lower().split('?')[0] else '.bin'
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    urllib.request.urlretrieve(url, tmp.name)
+    return Path(tmp.name)
 
 
 class Storage(ABC):
@@ -43,6 +52,8 @@ class LocalStorage(Storage):
         return str(path)
 
     def localise_for_read(self, uri: str) -> Path:
+        if uri.startswith(("https://", "http://")):
+            return _download_http(uri)
         if uri.startswith("gs://"):
             raise ValueError("GCS URIs not supported in local mode")
         return Path(uri)
@@ -61,6 +72,8 @@ class GcsStorage(Storage):
         return f"gs://{self._bucket.name}/{key}"
 
     def localise_for_read(self, uri: str) -> Path:
+        if uri.startswith(("https://", "http://")):
+            return _download_http(uri)
         if uri.startswith("gs://"):
             key = uri[len(f"gs://{self._bucket.name}/"):]
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(key).suffix)

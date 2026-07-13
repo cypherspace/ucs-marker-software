@@ -31,4 +31,5 @@ export const config = {
   frontendUrl: process.env.FRONTEND_URL ?? '',
   allowSignup: process.env.ALLOW_SIGNUP === 'true',
   cookieSecure: (process.env.COOKIE_SECURE ?? (process.env.NODE_ENV === 'production' ? 'true' : 'false')) === 'true',
+  tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY ?? '0'.repeat(64),
 };

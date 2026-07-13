@@ -3,6 +3,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { db } from '../db.js';
 import { config } from '../config.js';
 import { createSession, destroySession, loadSessionUser } from '../services/sessions.js';
+import { saveRefreshToken } from '../services/drive.js';
 
 const router = Router();
 
@@ -91,9 +92,9 @@ router.get('/google', (req, res) => {
     client_id: config.googleOAuthClientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'openid email profile',
-    access_type: 'online',
-    prompt: 'select_account',
+    scope: 'openid email profile https://www.googleapis.com/auth/drive.file',
+    access_type: 'offline',
+    prompt: 'consent',
     state,
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
@@ -129,7 +130,7 @@ router.get('/google/callback', async (req, res, next) => {
       }),
     });
     if (!tokenRes.ok) { bounceToLogin('oauth_failed'); return; }
-    const tokens = (await tokenRes.json()) as { id_token?: string };
+    const tokens = (await tokenRes.json()) as { id_token?: string; refresh_token?: string };
     if (!tokens.id_token) { bounceToLogin('oauth_failed'); return; }
 
     const verifyRes = await fetch(
@@ -176,6 +177,7 @@ router.get('/google/callback', async (req, res, next) => {
       await db('users').where({ id: user.id }).update({ last_login_at: db.fn.now() });
     }
 
+    if (tokens.refresh_token) await saveRefreshToken(user!.id, tokens.refresh_token);
     const sid = await createSession(user!.id, req.get('user-agent') ?? undefined);
     setCookie(res, SID_COOKIE, sid, { maxAge: 7 * 24 * 60 * 60 });
     res.redirect(frontendUrl(req));

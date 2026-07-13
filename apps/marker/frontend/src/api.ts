@@ -120,6 +120,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
   getScriptUrl: (clipId: string) => http<ApiSuccess<{ url: string }>>(`${A}/clips/${clipId}/script`),
+  // Stable URL for clip image — redirects to Drive/GCS/local as appropriate
+  clipImageUrl: (clipId: string) => `${A}/clips/${clipId}/image`,
 
   // Comparative marking
   getNextPair: (examId: string, questionId: string) =>
@@ -130,6 +132,10 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ winner_clip_id: winnerClipId }),
     }),
+
+  // Export
+  exportResults: (examId: string, includeNames?: boolean) =>
+    http<ApiSuccess<{ driveUrl?: string; csv?: string }>>(`${A}/exams/${examId}/export${includeNames ? '?names=1' : ''}`),
 
   // AI
   runOcr: (clipId: string) => http<ApiSuccess<{ ocr_text: string }>>(`${A}/clips/${clipId}/ocr`, { method: 'POST' }),

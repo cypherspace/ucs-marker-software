@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { storage } from '../services/storage.js';
+import { isDriveUri, fileIdFromUri, getDownloadUrl } from '../services/drive.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 
 const router = Router();
@@ -50,10 +51,18 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
       res.json({ data: null, meta: { message: 'All clips marked' } }); return;
     }
 
-    // Get the question for max_marks and MS url
+    // Get the question for max_marks
     const question = await db('exam_questions').where({ id: req.params.questionId }).first();
-    // Generate a public URL for the clip image
-    const clipUrl = await storage.publicUrl(clip.clip_image_url);
+
+    // Resolve clip image URL (Drive or local/GCS)
+    const exam = await db('exams').where({ id: req.params.examId }).first<{ lead_teacher_id: string }>();
+    let clipUrl: string;
+    if (isDriveUri(clip.clip_image_url)) {
+      clipUrl = await getDownloadUrl(exam!.lead_teacher_id, fileIdFromUri(clip.clip_image_url));
+    } else {
+      clipUrl = await storage.publicUrl(clip.clip_image_url);
+    }
+
     // Mark-scheme clip URL, if one was produced during clipping
     let msUrl: string | null = null;
     if (question?.ms_clip_image_url) {
@@ -150,10 +159,30 @@ router.get('/my-exams', requireAuth, async (req, res, next) => {
   }
 });
 
+// Serve clip image, handling Drive and local/GCS — frontend always uses this for <img> src
+router.get('/clips/:id/image', requireAuth, async (req, res, next) => {
+  try {
+    const clip = await db('script_clips as sc')
+      .join('exam_questions as eq', 'eq.id', 'sc.question_id')
+      .join('exams as e', 'e.id', 'eq.exam_id')
+      .where('sc.id', req.params.id)
+      .first<{ clip_image_url: string; lead_teacher_id: string }>();
+    if (!clip) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
+    let url: string;
+    if (isDriveUri(clip.clip_image_url)) {
+      url = await getDownloadUrl(clip.lead_teacher_id, fileIdFromUri(clip.clip_image_url));
+    } else {
+      url = await storage.publicUrl(clip.clip_image_url);
+    }
+    res.redirect(302, url);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Get next comparative pair for essay marking
 router.get('/exams/:examId/compare/:questionId', requireAuth, async (req, res, next) => {
   try {
-    // Find an unresolved pair assigned or create one
     const pair = await db('comparative_pairs')
       .where({ exam_id: req.params.examId, question_id: req.params.questionId })
       .whereNull('winner_clip_id')
@@ -161,14 +190,16 @@ router.get('/exams/:examId/compare/:questionId', requireAuth, async (req, res, n
     if (!pair) {
       res.json({ data: null, meta: { message: 'No more pairs to compare' } }); return;
     }
-    const [clipA, clipB] = await Promise.all([
-      storage.publicUrl(
-        (await db('script_clips').where({ id: pair.clip_a_id }).first<{ clip_image_url: string }>())?.clip_image_url ?? ''
-      ).catch(() => ''),
-      storage.publicUrl(
-        (await db('script_clips').where({ id: pair.clip_b_id }).first<{ clip_image_url: string }>())?.clip_image_url ?? ''
-      ).catch(() => ''),
-    ]);
+    const exam = await db('exams').where({ id: req.params.examId }).first<{ lead_teacher_id: string }>();
+
+    async function resolveClipUrl(clipId: string): Promise<string> {
+      const row = await db('script_clips').where({ id: clipId }).first<{ clip_image_url: string }>();
+      const uri = row?.clip_image_url ?? '';
+      if (isDriveUri(uri)) return getDownloadUrl(exam!.lead_teacher_id, fileIdFromUri(uri)).catch(() => '');
+      return storage.publicUrl(uri).catch(() => '');
+    }
+
+    const [clipA, clipB] = await Promise.all([resolveClipUrl(pair.clip_a_id), resolveClipUrl(pair.clip_b_id)]);
     res.json({ data: { ...pair, clip_a_image_url: clipA, clip_b_image_url: clipB } });
   } catch (err) {
     next(err);
