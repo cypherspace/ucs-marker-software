@@ -11,6 +11,7 @@ import scriptsRouter from './routes/scripts.js';
 import marksRouter from './routes/marks.js';
 import aiRouter from './routes/ai.js';
 import adminRouter from './routes/admin.js';
+import exportRouter from './routes/export.js';
 
 const app = express();
 
@@ -35,6 +36,7 @@ app.use('/admin/v1', adminRouter);
 app.use('/api/v1', scriptsRouter);
 app.use('/api/v1', marksRouter);
 app.use('/api/v1', aiRouter);
+app.use('/api/v1', exportRouter);
 app.use('/api/v1', examsRouter);
 
 // `/files/?u=<uri>` — resolve storage URI to bytes (GCS: 302 redirect; local: stream)

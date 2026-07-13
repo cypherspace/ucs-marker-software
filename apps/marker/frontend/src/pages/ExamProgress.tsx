@@ -1,12 +1,33 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 
 export function ExamProgress() {
   const { id } = useParams<{ id: string }>();
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
 
   const examQ = useQuery({ queryKey: ['exam', id], queryFn: () => api.getExam(id!) });
   const progressQ = useQuery({ queryKey: ['progress', id], queryFn: () => api.getProgress(id!) });
+
+  const exportMutation = useMutation({
+    mutationFn: (includeNames: boolean) => api.exportResults(id!, includeNames),
+    onSuccess: (res, includeNames) => {
+      if (res.data.driveUrl) {
+        setExportMsg('Exported to Google Drive.');
+        window.open(res.data.driveUrl, '_blank', 'noopener');
+      } else if (res.data.csv) {
+        const blob = new Blob([res.data.csv], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `results${includeNames ? '-named' : ''}.csv`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        setExportMsg('CSV downloaded.');
+      }
+    },
+    onError: (e) => setExportMsg((e as Error).message),
+  });
 
   if (examQ.isLoading || progressQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
@@ -18,7 +39,25 @@ export function ExamProgress() {
       <div className="mb-6 flex items-center gap-4">
         <Link to="/exams" className="text-sm text-indigo-600 hover:underline">← Exams</Link>
         <h1 className="text-2xl font-semibold text-slate-800">{exam?.name}</h1>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => { setExportMsg(null); exportMutation.mutate(false); }}
+            disabled={exportMutation.isPending}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {exportMutation.isPending ? 'Exporting…' : 'Export Results'}
+          </button>
+          <button
+            onClick={() => { setExportMsg(null); exportMutation.mutate(true); }}
+            disabled={exportMutation.isPending}
+            title="Adds student names via a database join — names never leave the platform otherwise"
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Export with Names
+          </button>
+        </div>
       </div>
+      {exportMsg && <p className="mb-4 text-sm text-slate-600">{exportMsg}</p>}
 
       <div className="space-y-4">
         {progress?.questions.map((q) => {

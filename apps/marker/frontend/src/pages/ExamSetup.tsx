@@ -10,6 +10,7 @@ import {
   fromQuestionRegions,
   type DrawnRegion,
 } from '../components/CoordinatePicker';
+import { DrivePicker, driveConfigured } from '../components/DrivePicker';
 
 type SetupTab = 'scripts' | 'questions' | 'assign';
 type RegionType = 'question' | 'ms' | 'name_zone';
@@ -139,13 +140,17 @@ export function ExamSetup() {
               Upload one PDF per student. Scripts are automatically assigned student numbers (001, 002, …).
               Student names are <strong>never</strong> stored alongside the scripts — the system uses numbers only until export.
             </p>
-            <input
-              type="file"
-              accept=".pdf"
-              multiple
-              onChange={(e) => setUploadFiles(Array.from(e.target.files ?? []))}
-              className="mb-3 block text-sm text-slate-600"
-            />
+            {exam?.use_drive_storage && driveConfigured ? (
+              <DrivePicker onFiles={setUploadFiles} disabled={uploadMutation.isPending} />
+            ) : (
+              <input
+                type="file"
+                accept=".pdf"
+                multiple
+                onChange={(e) => setUploadFiles(Array.from(e.target.files ?? []))}
+                className="mb-3 block text-sm text-slate-600"
+              />
+            )}
             {uploadFiles.length > 0 && (
               <p className="mb-3 text-sm text-slate-600">{uploadFiles.length} file(s) selected</p>
             )}
