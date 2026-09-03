@@ -1,0 +1,15 @@
+{
+  "name": "@marker/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "migrate:up": "node migrate.mjs up",
+    "migrate:down": "node migrate.mjs down"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "node-pg-migrate": "^7.6.1",
+    "pg": "^8.13.1"
+  }
+}
