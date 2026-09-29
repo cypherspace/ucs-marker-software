@@ -16,6 +16,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
+// Google Cloud project number. With the narrow drive.file scope, Google only
+// authorises picked files for this app when the picker is told the app ID.
+const APP_ID = import.meta.env.VITE_GOOGLE_PROJECT_NUMBER as string | undefined;
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
 export const driveConfigured = Boolean(CLIENT_ID && API_KEY);
@@ -87,6 +90,7 @@ export function DrivePicker({ onFiles, disabled }: { onFiles: (files: File[]) =>
           .addView(new window.google.picker.DocsView().setMimeTypes('application/pdf'))
           .setOAuthToken(token)
           .setDeveloperKey(API_KEY)
+          .setAppId(APP_ID)
           .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
           .setCallback((data: any) => {
             if (data.action === window.google.picker.Action.PICKED) {

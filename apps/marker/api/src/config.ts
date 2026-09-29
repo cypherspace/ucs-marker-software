@@ -13,6 +13,16 @@ function requiredLocalDb(): string {
   return v;
 }
 
+function tokenEncryptionKey(): string {
+  const v = process.env.TOKEN_ENCRYPTION_KEY;
+  if (!v) {
+    if (process.env.NODE_ENV === 'production') throw new Error('Missing env var: TOKEN_ENCRYPTION_KEY');
+    return '0'.repeat(64);
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(v)) throw new Error('TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes)');
+  return v;
+}
+
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: Number(process.env.PORT ?? 8080),
@@ -31,5 +41,5 @@ export const config = {
   frontendUrl: process.env.FRONTEND_URL ?? '',
   allowSignup: process.env.ALLOW_SIGNUP === 'true',
   cookieSecure: (process.env.COOKIE_SECURE ?? (process.env.NODE_ENV === 'production' ? 'true' : 'false')) === 'true',
-  tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY ?? '0'.repeat(64),
+  tokenEncryptionKey: tokenEncryptionKey(),
 };
