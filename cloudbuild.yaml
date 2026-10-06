@@ -108,5 +108,4 @@ substitutions:
   _VITE_GOOGLE_PROJECT_NUMBER: '988173603763'
 
 options:
-  logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
