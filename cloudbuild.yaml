@@ -48,14 +48,14 @@ steps:
       - --platform=managed
       - --service-account=marker-sa@$PROJECT_ID.iam.gserviceaccount.com
       - --no-allow-unauthenticated
-      - --ingress=internal
+      - --ingress=all
       - --set-env-vars=STORAGE_BACKEND=gcs,STORAGE_BUCKET=ucs-marking-software-storage
       - --set-secrets=GOOGLE_API_KEY=marker-gemini-api-key:latest
       - --memory=1Gi
       - --cpu=1
       - --min-instances=0
       - --max-instances=3
-      - --timeout=120
+      - --timeout=300
     waitFor: [push-extractor]
 
   # ── Deploy API + frontend ────────────────────────────────────────────────────
@@ -75,11 +75,11 @@ steps:
       - --set-env-vars=NODE_ENV=production,STORAGE_BACKEND=gcs,STORAGE_BUCKET=ucs-marking-software-storage,CLOUD_SQL_INSTANCE=ucs-marking-software:europe-west2:marker-postgres,DB_NAME=marker_db,DB_USER=marker-sa@ucs-marking-software.iam,COOKIE_SECURE=true
       - --set-secrets=GOOGLE_OAUTH_CLIENT_ID=marker-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=marker-oauth-client-secret:latest,TOKEN_ENCRYPTION_KEY=marker-token-encryption-key:latest,GOOGLE_API_KEY=marker-gemini-api-key:latest
       - --add-cloudsql-instances=ucs-marking-software:europe-west2:marker-postgres
-      - --memory=512Mi
+      - --memory=1Gi
       - --cpu=1
       - --min-instances=0
       - --max-instances=5
-      - --timeout=60
+      - --timeout=300
     waitFor: [push-api, deploy-extractor]
 
   # ── Wire extractor URL into API now that both are deployed ───────────────────
