@@ -23,9 +23,7 @@ ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID \
     VITE_GOOGLE_API_KEY=$VITE_GOOGLE_API_KEY \
     VITE_GOOGLE_PROJECT_NUMBER=$VITE_GOOGLE_PROJECT_NUMBER
 
-RUN npm run build --workspace=packages/shared-types \
- && npm run build --workspace=packages/shared-middleware \
- && npm run build --workspace=apps/marker/frontend \
+RUN npm run build --workspace=apps/marker/frontend \
  && npm run build --workspace=apps/marker/api
 
 # ── Stage 2: production image ─────────────────────────────────────────────────
@@ -34,22 +32,16 @@ FROM node:20-slim
 ENV NODE_ENV=production
 WORKDIR /repo
 
-# Reinstall only production deps (workspaces need all four package.json files)
+# Reinstall only production deps for the API
 COPY package*.json ./
 COPY apps/marker/api/package*.json apps/marker/api/
 COPY packages/shared-types/package*.json packages/shared-types/
 COPY packages/shared-middleware/package*.json packages/shared-middleware/
-RUN npm ci --omit=dev \
-      --workspace=apps/marker/api \
-      --workspace=packages/shared-types \
-      --workspace=packages/shared-middleware \
-      --ignore-scripts
+RUN npm ci --omit=dev --workspace=apps/marker/api --ignore-scripts
 
 # Built output from stage 1
-COPY --from=builder /repo/packages/shared-types/dist       packages/shared-types/dist
-COPY --from=builder /repo/packages/shared-middleware/dist  packages/shared-middleware/dist
 COPY --from=builder /repo/apps/marker/api/dist             apps/marker/api/dist
-# Frontend dist: index.ts resolves `../frontend/dist` relative to api cwd
+# Frontend dist: served as static files by the API
 COPY --from=builder /repo/apps/marker/frontend/dist        apps/marker/frontend/dist
 
 WORKDIR /repo/apps/marker/api
