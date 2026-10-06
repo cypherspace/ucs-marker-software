@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { storage, isGcsUri } from '../services/storage.js';
 import { isDriveUri, fileIdFromUri, getDownloadUrl, uploadFile, createExamFolder } from '../services/drive.js';
+import { extractorFetch } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { createReadStream, existsSync, statSync } from 'node:fs';
@@ -121,7 +122,7 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
       name_zones: q.name_zones ?? [],
     }));
 
-    const resp = await fetch(`${config.extractorUrl}/clip-scripts`, {
+    const resp = await extractorFetch('/clip-scripts', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ scripts: scriptPayload, questions: questionPayload }),
@@ -169,7 +170,7 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
     const msQuestions = questions.filter((q) => Array.isArray(q.ms_clip_coordinates) && q.ms_clip_coordinates.length);
     if (exam?.mark_scheme_pdf_url && msQuestions.length) {
       try {
-        const msResp = await fetch(`${config.extractorUrl}/clip-mark-scheme`, {
+        const msResp = await extractorFetch('/clip-mark-scheme', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -225,7 +226,7 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
       pdfUri = storage.rawUri(script.original_pdf_url);
     }
 
-    const resp = await fetch(`${config.extractorUrl}/render`, {
+    const resp = await extractorFetch('/render', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ pdf_uri: pdfUri, page_number: page, max_width: 2000 }),

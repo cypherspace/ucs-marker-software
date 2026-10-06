@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { storage } from '../services/storage.js';
+import { extractorFetch } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { GoogleGenAI } from '@google/genai';
@@ -20,7 +21,7 @@ router.post('/clips/:id/ocr', requireAuth, async (req, res, next) => {
     if (!clip) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
 
     // Call the Python extractor OCR endpoint
-    const resp = await fetch(`${config.extractorUrl}/ocr`, {
+    const resp = await extractorFetch('/ocr', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ image_url: storage.rawUri(clip.clip_image_url) }),

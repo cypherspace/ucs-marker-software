@@ -35,6 +35,8 @@ export interface Exam {
   lead_teacher_id: string;
   status: ExamStatus;
   mark_scheme_pdf_url: string | null;
+  use_drive_storage: boolean;
+  drive_folder_id: string | null;
   created_at: string;
 }
 

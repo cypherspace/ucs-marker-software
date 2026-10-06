@@ -1,0 +1,112 @@
+steps:
+  # ── Build API + frontend image ───────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build-api
+    args:
+      - build
+      - --file=apps/marker/api/Dockerfile
+      - --tag=europe-west2-docker.pkg.dev/$PROJECT_ID/marker/api:$COMMIT_SHA
+      - --tag=europe-west2-docker.pkg.dev/$PROJECT_ID/marker/api:latest
+      - --build-arg=VITE_GOOGLE_CLIENT_ID=${_VITE_GOOGLE_CLIENT_ID}
+      - --build-arg=VITE_GOOGLE_API_KEY=${_VITE_GOOGLE_API_KEY}
+      - --build-arg=VITE_GOOGLE_PROJECT_NUMBER=${_VITE_GOOGLE_PROJECT_NUMBER}
+      - .
+    waitFor: ['-']
+
+  # ── Build extractor image ────────────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build-extractor
+    args:
+      - build
+      - --file=services/extractor/Dockerfile
+      - --tag=europe-west2-docker.pkg.dev/$PROJECT_ID/marker/extractor:$COMMIT_SHA
+      - --tag=europe-west2-docker.pkg.dev/$PROJECT_ID/marker/extractor:latest
+      - services/extractor
+    waitFor: ['-']
+
+  # ── Push images ──────────────────────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-api
+    args: [push, '--all-tags', 'europe-west2-docker.pkg.dev/$PROJECT_ID/marker/api']
+    waitFor: [build-api]
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-extractor
+    args: [push, '--all-tags', 'europe-west2-docker.pkg.dev/$PROJECT_ID/marker/extractor']
+    waitFor: [build-extractor]
+
+  # ── Deploy extractor (internal, no public ingress) ───────────────────────────
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy-extractor
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - marker-extractor
+      - --image=europe-west2-docker.pkg.dev/$PROJECT_ID/marker/extractor:$COMMIT_SHA
+      - --region=europe-west2
+      - --platform=managed
+      - --service-account=marker-sa@$PROJECT_ID.iam.gserviceaccount.com
+      - --no-allow-unauthenticated
+      - --ingress=all
+      - --set-env-vars=STORAGE_BACKEND=gcs,STORAGE_BUCKET=ucs-marking-software-storage
+      - --set-secrets=GOOGLE_API_KEY=marker-gemini-api-key:latest
+      - --memory=1Gi
+      - --cpu=1
+      - --min-instances=0
+      - --max-instances=3
+      - --timeout=300
+    waitFor: [push-extractor]
+
+  # ── Deploy API + frontend ────────────────────────────────────────────────────
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy-api
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - marker-api
+      - --image=europe-west2-docker.pkg.dev/$PROJECT_ID/marker/api:$COMMIT_SHA
+      - --region=europe-west2
+      - --platform=managed
+      - --service-account=marker-sa@$PROJECT_ID.iam.gserviceaccount.com
+      - --allow-unauthenticated
+      - --ingress=all
+      - --set-env-vars=NODE_ENV=production,STORAGE_BACKEND=gcs,STORAGE_BUCKET=ucs-marking-software-storage,CLOUD_SQL_INSTANCE=ucs-marking-software:europe-west2:marker-postgres,DB_NAME=marker_db,DB_USER=marker-sa@ucs-marking-software.iam,COOKIE_SECURE=true
+      - --set-secrets=GOOGLE_OAUTH_CLIENT_ID=marker-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=marker-oauth-client-secret:latest,TOKEN_ENCRYPTION_KEY=marker-token-encryption-key:latest,GOOGLE_API_KEY=marker-gemini-api-key:latest
+      - --add-cloudsql-instances=ucs-marking-software:europe-west2:marker-postgres
+      - --memory=1Gi
+      - --cpu=1
+      - --min-instances=0
+      - --max-instances=5
+      - --timeout=300
+    waitFor: [push-api, deploy-extractor]
+
+  # ── Wire extractor URL into API now that both are deployed ───────────────────
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: set-extractor-url
+    entrypoint: bash
+    args:
+      - -c
+      - |
+          EXTRACTOR_URL=$$(gcloud run services describe marker-extractor \
+            --region=europe-west2 --format='value(status.url)')
+          API_URL=$$(gcloud run services describe marker-api \
+            --region=europe-west2 --format='value(status.url)')
+          gcloud run services update marker-api \
+            --region=europe-west2 \
+            --update-env-vars="EXTRACTOR_URL=$$EXTRACTOR_URL,PUBLIC_URL=$$API_URL"
+    waitFor: [deploy-api]
+
+images:
+  - 'europe-west2-docker.pkg.dev/$PROJECT_ID/marker/api:$COMMIT_SHA'
+  - 'europe-west2-docker.pkg.dev/$PROJECT_ID/marker/extractor:$COMMIT_SHA'
+
+substitutions:
+  _VITE_GOOGLE_CLIENT_ID: ''
+  _VITE_GOOGLE_API_KEY: ''
+  _VITE_GOOGLE_PROJECT_NUMBER: '988173603763'
+
+options:
+  machineType: E2_HIGHCPU_8
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET

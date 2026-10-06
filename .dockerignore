@@ -1,0 +1,16 @@
+node_modules
+.env
+*.local
+storage/
+dist/
+*.tsbuildinfo
+.git
+.venv
+__pycache__
+*.pyc
+*.log
+.DS_Store
+Thumbs.db
+services/extractor/.venv
+infra/
+docs/

@@ -1,9 +1,10 @@
 import cors from 'cors';
 import express from 'express';
 import { existsSync, statSync, createReadStream } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { config } from './config.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { requireAuth } from './middleware/requireAuth.js';
 import { isGcsUri, storage } from './services/storage.js';
 import authRouter from './routes/auth.js';
 import examsRouter from './routes/exams.js';
@@ -40,13 +41,17 @@ app.use('/api/v1', exportRouter);
 app.use('/api/v1', examsRouter);
 
 // `/files/?u=<uri>` — resolve storage URI to bytes (GCS: 302 redirect; local: stream)
-app.get('/files/', async (req, res, next) => {
+app.get('/files/', requireAuth, async (req, res, next) => {
   try {
     const uri = String(req.query.u ?? '');
     if (!uri) { res.status(400).json({ error: 'Missing u param', code: 'BAD_REQUEST' }); return; }
     if (isGcsUri(uri)) {
       const signed = await storage.publicUrl(uri);
       res.redirect(302, signed); return;
+    }
+    const rel = relative(config.storageDir, resolve(uri));
+    if (rel.startsWith('..') || isAbsolute(rel)) {
+      res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' }); return;
     }
     if (!existsSync(uri)) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
     const stat = statSync(uri);
