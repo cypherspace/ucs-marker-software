@@ -31,7 +31,8 @@ class Storage(ABC):
 
 
 # Repo root: services/extractor/pipeline/storage.py -> up 3 levels.
-REPO_ROOT = Path(__file__).resolve().parents[3]
+_parents = Path(__file__).resolve().parents
+REPO_ROOT = _parents[3] if len(_parents) > 3 else _parents[-1]
 
 
 class LocalStorage(Storage):
