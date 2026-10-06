@@ -76,4 +76,4 @@ Secrets created from PowerShell got a UTF-8 BOM, which broke the `TOKEN_ENCRYPTI
 - Cloud Run caps request bodies at 32 MB. Script PDF uploads above that fail with 413 (not fixed).
 - CORS is `origin: true` with credentials (not tightened; low risk with `SameSite=Lax` and same-origin hosting).
 - Live end-to-end testing of script upload, clip generation (private extractor with ID-token auth) and Drive storage had not been done when this was written.
-- The working branch `claude/brave-meitner-62xn07` is what is deployed. It has not been merged to `main`, so the trigger has never fired automatically.
+- Branching: `main` is what is deployed (merged via PR #2 on 2026-10-06; every push to `main` triggers a Cloud Build deploy). Develop on `dev`, then PR into `main` to release.
