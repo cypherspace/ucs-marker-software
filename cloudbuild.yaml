@@ -89,11 +89,13 @@ steps:
     args:
       - -c
       - |
-          EXTRACTOR_URL=$(gcloud run services describe marker-extractor \
+          EXTRACTOR_URL=$$(gcloud run services describe marker-extractor \
+            --region=europe-west2 --format='value(status.url)')
+          API_URL=$$(gcloud run services describe marker-api \
             --region=europe-west2 --format='value(status.url)')
           gcloud run services update marker-api \
             --region=europe-west2 \
-            --update-env-vars="EXTRACTOR_URL=${EXTRACTOR_URL},PUBLIC_URL=$(gcloud run services describe marker-api --region=europe-west2 --format='value(status.url)')"
+            --update-env-vars="EXTRACTOR_URL=$$EXTRACTOR_URL,PUBLIC_URL=$$API_URL"
     waitFor: [deploy-api]
 
 images:
