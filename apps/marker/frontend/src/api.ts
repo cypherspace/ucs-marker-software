@@ -1,6 +1,7 @@
 import type {
   ApiSuccess, AuthMe, Exam, ExamQuestion, StudentScript, ScriptClip,
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
+  AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
 } from '@marker/shared-types';
 
 export class HttpError extends Error {
@@ -180,19 +181,31 @@ export const api = {
     }),
 
   // Admin
+  listTeachers: () => http<ApiSuccess<TeacherOption[]>>(`${A}/teachers`),
   admin: {
-    listUsers: () => http<ApiSuccess<{ users: AuthMe[]; invites: { email: string; role: string }[] }>>(`${ADM}/users`),
+    listUsers: () => http<ApiSuccess<{ users: AdminUser[]; invites: AdminInvite[] }>>(`${ADM}/users`),
     addInvite: (email: string, role: 'admin' | 'teacher') =>
       http<ApiSuccess<{ ok: true }>>(`${ADM}/invites`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ email, role }),
       }),
+    removeInvite: (email: string) =>
+      http<ApiSuccess<{ ok: true }>>(`${ADM}/invites/${encodeURIComponent(email)}`, { method: 'DELETE' }),
     setUserRole: (id: string, role: 'admin' | 'teacher') =>
-      http<ApiSuccess<AuthMe>>(`${ADM}/users/${id}`, {
+      http<ApiSuccess<{ id: string; email: string; role: 'admin' | 'teacher' }>>(`${ADM}/users/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ role }),
       }),
+    deactivateUser: (id: string) =>
+      http<ApiSuccess<{ id: string; disabled: true; leads_exams: number }>>(`${ADM}/users/${id}/deactivate`, { method: 'POST' }),
+    reactivateUser: (id: string) =>
+      http<ApiSuccess<{ id: string; disabled: false }>>(`${ADM}/users/${id}/reactivate`, { method: 'POST' }),
+    auditLog: (before?: string) =>
+      http<ApiSuccess<{ entries: AuditEntry[]; next_before: string | null }>>(
+        `${ADM}/audit?limit=50${before ? `&before=${encodeURIComponent(before)}` : ''}`,
+      ),
+    overview: () => http<ApiSuccess<OverviewExam[]>>(`${ADM}/overview`),
   },
 };

@@ -35,6 +35,7 @@ export async function loadSessionUser(sid: string): Promise<SessionUser | null> 
     .join('users as u', 'u.id', 's.user_id')
     .where('s.id', sid)
     .andWhere('s.expires_at', '>', db.fn.now())
+    .whereNull('u.disabled_at')
     .first<SessionUser>('u.id', 'u.email', 'u.name', 'u.role');
   return row ?? null;
 }
@@ -42,4 +43,8 @@ export async function loadSessionUser(sid: string): Promise<SessionUser | null> 
 export async function destroySession(sid: string): Promise<void> {
   if (!sid) return;
   await db('sessions').where({ id: sid }).del();
+}
+
+export async function destroyUserSessions(userId: string): Promise<void> {
+  await db('sessions').where({ user_id: userId }).del();
 }

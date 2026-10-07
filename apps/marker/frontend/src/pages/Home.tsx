@@ -15,6 +15,7 @@ function Icon({ children }: { children: ReactNode }) {
 
 const MarkIcon = () => <Icon><path d="M4 12.5 9 17.5 20 6.5" /></Icon>;
 const ExamIcon = () => <Icon><path d="M8 4h8l3 3v13H5V4h3Z" /><path d="M9 11h6M9 15h6" /></Icon>;
+const StaffIcon = () => <Icon><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" /><path d="M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.4c2 .7 3.5 2.6 3.5 5.6" /></Icon>;
 const ProgressIcon = () => <Icon><path d="M5 20V10M12 20V4M19 20v-7" /></Icon>;
 
 function HomeCard({
@@ -44,7 +45,7 @@ export function Home() {
   }
 
   const me = meQ.data?.data;
-  const { marking, exams, progress } = homeQ.data.data;
+  const { marking, exams, progress, admin } = homeQ.data.data;
   const pct = progress.clips_total > 0 ? Math.round((progress.clips_marked / progress.clips_total) * 100) : 0;
   const nothingYet = exams.total === 0 && marking.assigned_questions === 0;
 
@@ -162,6 +163,22 @@ export function Home() {
             </>
           )}
         </HomeCard>
+        {admin && (
+          <HomeCard
+            icon={<StaffIcon />}
+            title="Staff and admin"
+            actions={<LinkButton to="/admin" variant="secondary">Manage staff</LinkButton>}
+          >
+            <p className="text-3xl font-semibold text-slate-800">
+              {admin.staff} <span className="text-base font-normal text-slate-500">staff {admin.staff === 1 ? 'account' : 'accounts'}</span>
+            </p>
+            <p className="text-sm text-slate-500">
+              {admin.pending_invites === 0
+                ? 'No pending invites.'
+                : `${plural(admin.pending_invites, 'invite')} waiting for the person to sign in.`}
+            </p>
+          </HomeCard>
+        )}
       </div>
     </div>
   );

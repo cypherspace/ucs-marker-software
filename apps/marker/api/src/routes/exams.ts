@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { createExamFolder } from '../services/drive.js';
+import { recordAudit } from '../services/audit.js';
 
 const router = Router();
 
@@ -253,6 +254,9 @@ router.patch('/:examId/questions/:questionId', requireAuth, requireRole(['teache
       .update(patch)
       .returning('*');
     if (!updated) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
+    await recordAudit(req, 'question.updated', 'question', updated.id, {
+      exam_id: req.params.examId, question_number: updated.question_number, fields: Object.keys(patch),
+    });
     res.json({ data: updated });
   } catch (err) {
     next(err);
@@ -297,6 +301,9 @@ router.delete('/:examId/questions/:questionId', requireAuth, requireRole(['teach
     }
 
     await db('exam_questions').where({ id: question.id }).delete();
+    await recordAudit(req, 'question.deleted', 'question', question.id, {
+      exam_id: req.params.examId, question_number: question.question_number, ...counts,
+    });
     res.json({ data: { ok: true, deleted: counts } });
   } catch (err) {
     next(err);

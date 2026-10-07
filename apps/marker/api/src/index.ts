@@ -14,6 +14,7 @@ import aiRouter from './routes/ai.js';
 import adminRouter from './routes/admin.js';
 import exportRouter from './routes/export.js';
 import homeRouter from './routes/home.js';
+import staffRouter from './routes/staff.js';
 
 const app = express();
 
@@ -40,6 +41,7 @@ app.use('/api/v1', marksRouter);
 app.use('/api/v1', aiRouter);
 app.use('/api/v1', exportRouter);
 app.use('/api/v1', homeRouter);
+app.use('/api/v1', staffRouter);
 app.use('/api/v1', examsRouter);
 
 // `/files/?u=<uri>` — resolve storage URI to bytes (GCS: 302 redirect; local: stream)
@@ -76,7 +78,7 @@ if (config.storageBackend === 'local' && existsSync(config.storageDir)) {
 const frontendDist = resolve(process.cwd(), '..', 'frontend', 'dist');
 if (existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
-  app.get(/^\/(?!(api|admin|files|health|auth)).*/, (_req, res) => {
+  app.get(/^\/(?!(api|admin\/v1|files|health|auth)).*/, (_req, res) => {
     res.sendFile(resolve(frontendDist, 'index.html'));
   });
 }

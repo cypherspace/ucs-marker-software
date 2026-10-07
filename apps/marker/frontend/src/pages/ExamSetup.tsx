@@ -28,14 +28,14 @@ export function ExamSetup() {
   const scriptsQ = useQuery({ queryKey: ['scripts', id], queryFn: () => api.listScripts(id!) });
   const questionsQ = useQuery({ queryKey: ['questions', id], queryFn: () => api.listQuestions(id!) });
   const assignmentsQ = useQuery({ queryKey: ['assignments', id], queryFn: () => api.listAssignments(id!) });
-  const usersQ = useQuery({ queryKey: ['admin-users'], queryFn: () => api.admin.listUsers() });
+  const usersQ = useQuery({ queryKey: ['teachers'], queryFn: () => api.listTeachers() });
   const progressQ = useQuery({ queryKey: ['progress', id], queryFn: () => api.getProgress(id!) });
 
   const exam = examQ.data?.data;
   const scripts = scriptsQ.data?.data ?? [];
   const questions = questionsQ.data?.data ?? [];
   const assignments = assignmentsQ.data?.data ?? [];
-  const teachers = usersQ.data?.data?.users ?? [];
+  const teachers = usersQ.data?.data ?? [];
   const progressByQuestion = new Map((progressQ.data?.data.questions ?? []).map((p) => [p.question_id, p]));
 
   // ── Script upload ─────────────────────────────────────────────────────────

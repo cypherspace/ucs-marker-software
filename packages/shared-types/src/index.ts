@@ -193,3 +193,57 @@ export interface HomeSummary {
   // Admins only
   admin?: { staff: number; pending_invites: number };
 }
+
+// ─── Admin ───────────────────────────────────────────────────────────────────
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: 'admin' | 'teacher';
+  created_at: string;
+  last_login_at: string | null;
+  disabled_at: string | null;
+  leads_exams: number;
+}
+
+export interface AdminInvite {
+  email: string;
+  role: 'admin' | 'teacher';
+  created_at: string;
+  added_by_email: string | null;
+}
+
+export interface AuditEntry {
+  id: string;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  actor_email: string | null;
+}
+
+export interface TeacherOption {
+  id: string;
+  email: string;
+  name: string | null;
+}
+
+export interface OverviewTeacher {
+  teacher_id: string;
+  email: string;
+  clips_assigned: number;
+  clips_marked: number;
+  last_marked_at: string | null;
+}
+
+export interface OverviewExam {
+  exam_id: string;
+  name: string;
+  status: ExamStatus;
+  lead_email: string | null;
+  clips_total: number;
+  clips_marked: number;
+  teachers: OverviewTeacher[];
+}

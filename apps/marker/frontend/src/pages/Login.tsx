@@ -2,6 +2,7 @@ import { useSearchParams } from 'react-router-dom';
 
 const ERROR_MESSAGES: Record<string, string> = {
   not_allowed: 'Your account is not authorised. Contact your system administrator.',
+  deactivated: 'This account has been deactivated. Contact your system administrator.',
   google_error: 'Google sign-in failed. Please try again.',
   oauth_failed: 'Authentication failed. Please try again.',
   stale_state: 'Login session expired. Please try again.',

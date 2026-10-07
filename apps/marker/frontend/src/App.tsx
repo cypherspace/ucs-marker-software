@@ -4,6 +4,7 @@ import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-ro
 import { api, HttpError } from './api';
 import { Login } from './pages/Login';
 import { Home } from './pages/Home';
+import { Admin } from './pages/Admin';
 import { ExamList } from './pages/ExamList';
 import { CreateExam } from './pages/CreateExam';
 import { ExamSetup } from './pages/ExamSetup';
@@ -68,6 +69,7 @@ export function App() {
           <NavLink to="/" end className={navCls}>Home</NavLink>
           <NavLink to="/my-exams" className={navCls}>My Marking</NavLink>
           {isTeacherOrAdmin && <NavLink to="/exams" className={navCls}>Exams</NavLink>}
+          {me.role === 'admin' && <NavLink to="/admin" className={navCls}>Admin</NavLink>}
         </nav>
         <div className="ml-auto flex items-center gap-3 whitespace-nowrap text-sm">
           <span className="hidden opacity-90 sm:inline">{me.email}</span>
@@ -87,6 +89,7 @@ export function App() {
           <Route path="/exams/:id/progress" element={<ExamProgress />} />
           <Route path="/mark/:examId/:questionId" element={<MarkingInterface />} />
           <Route path="/compare/:examId/:questionId" element={<ComparativeMarking />} />
+          <Route path="/admin" element={<Admin />} />
           <Route path="/login" element={<Login />} />
         </Routes>
       </main>
