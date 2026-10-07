@@ -3,7 +3,7 @@ import multer from 'multer';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { storage, isGcsUri } from '../services/storage.js';
-import { isDriveUri, fileIdFromUri, getDownloadUrl, uploadFile, createExamFolder } from '../services/drive.js';
+import { isDriveUri, fileIdFromUri, getDownloadUrl, getDriveMediaRequest, uploadFile, createExamFolder } from '../services/drive.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
@@ -111,13 +111,11 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
 
     // Resolve URIs for the extractor; Drive URIs need a temporary download URL
     const scriptPayload = await Promise.all(scripts.map(async (s) => {
-      let pdfUrl: string;
       if (isDriveUri(s.original_pdf_url)) {
-        pdfUrl = await getDownloadUrl(exam.lead_teacher_id, fileIdFromUri(s.original_pdf_url));
-      } else {
-        pdfUrl = storage.rawUri(s.original_pdf_url);
+        const { url, headers } = await getDriveMediaRequest(exam.lead_teacher_id, fileIdFromUri(s.original_pdf_url));
+        return { id: s.id, student_number: s.student_number, pdf_url: url, pdf_headers: headers };
       }
-      return { id: s.id, student_number: s.student_number, pdf_url: pdfUrl };
+      return { id: s.id, student_number: s.student_number, pdf_url: storage.rawUri(s.original_pdf_url) };
     }));
 
     const questionPayload = questions.map((q) => ({
@@ -143,8 +141,13 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
     }
     if (!resp.ok) {
       const body = await resp.text();
-      console.error('Extractor error:', body);
-      res.status(502).json({ error: 'Extractor failed', code: 'EXTRACTOR_ERROR' }); return;
+      console.error(`Extractor clip error (${resp.status}):`, body);
+      let detail = '';
+      try { detail = String((JSON.parse(body) as { detail?: unknown }).detail ?? ''); } catch { /* not JSON */ }
+      res.status(502).json({
+        error: `Clipping failed (extractor returned ${resp.status}${detail ? `: ${detail}` : ''})`,
+        code: 'EXTRACTOR_ERROR',
+      }); return;
     }
     const result = (await resp.json()) as { clips: { script_id: string; question_id: string; clip_image_url: string }[] };
 
@@ -234,8 +237,9 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
     }
 
     let pdfUri: string;
+    let pdfHeaders: Record<string, string> | undefined;
     if (isDriveUri(script.original_pdf_url)) {
-      pdfUri = await getDownloadUrl(script.lead_teacher_id, fileIdFromUri(script.original_pdf_url));
+      ({ url: pdfUri, headers: pdfHeaders } = await getDriveMediaRequest(script.lead_teacher_id, fileIdFromUri(script.original_pdf_url)));
     } else {
       pdfUri = storage.rawUri(script.original_pdf_url);
     }
@@ -245,7 +249,7 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
       resp = await extractorFetch('/render', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pdf_uri: pdfUri, page_number: page, max_width: 2000 }),
+        body: JSON.stringify({ pdf_uri: pdfUri, pdf_headers: pdfHeaders, page_number: page, max_width: 2000 }),
       });
     } catch (err) {
       console.error('Extractor unreachable:', err);

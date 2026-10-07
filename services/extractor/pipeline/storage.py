@@ -2,17 +2,27 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
+import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 
-def _download_http(url: str) -> Path:
+def _download_http(url: str, headers: dict[str, str] | None = None) -> Path:
     """Download an HTTP/HTTPS URL to a temp file and return its path."""
-    suffix = '.pdf' if '.pdf' in url.lower().split('?')[0] else '.bin'
+    path_part = url.lower().split('?')[0]
+    suffix = '.pdf' if path_part.endswith('.pdf') or 'googleapis.com/drive/' in path_part else '.bin'
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    urllib.request.urlretrieve(url, tmp.name)
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {})) as resp:
+            shutil.copyfileobj(resp, tmp)
+    except urllib.error.HTTPError as exc:
+        body = exc.read(500).decode("utf-8", "replace").strip()
+        raise RuntimeError(f"HTTP Error {exc.code}: {exc.reason}. {body}") from exc
+    finally:
+        tmp.close()
     return Path(tmp.name)
 
 
@@ -22,8 +32,8 @@ class Storage(ABC):
         """Save data at key. Returns a URI (absolute path or gs://)."""
 
     @abstractmethod
-    def localise_for_read(self, uri: str) -> Path:
-        """Return a local Path for reading. Downloads from GCS if needed."""
+    def localise_for_read(self, uri: str, headers: dict[str, str] | None = None) -> Path:
+        """Return a local Path for reading. Downloads from GCS or HTTP (with headers) if needed."""
 
     @abstractmethod
     def raw_uri(self, uri: str) -> str:
@@ -52,9 +62,9 @@ class LocalStorage(Storage):
         path.write_bytes(data)
         return str(path)
 
-    def localise_for_read(self, uri: str) -> Path:
+    def localise_for_read(self, uri: str, headers: dict[str, str] | None = None) -> Path:
         if uri.startswith(("https://", "http://")):
-            return _download_http(uri)
+            return _download_http(uri, headers)
         if uri.startswith("gs://"):
             raise ValueError("GCS URIs not supported in local mode")
         return Path(uri)
@@ -72,9 +82,9 @@ class GcsStorage(Storage):
         self._bucket.blob(key).upload_from_string(data)
         return f"gs://{self._bucket.name}/{key}"
 
-    def localise_for_read(self, uri: str) -> Path:
+    def localise_for_read(self, uri: str, headers: dict[str, str] | None = None) -> Path:
         if uri.startswith(("https://", "http://")):
-            return _download_http(uri)
+            return _download_http(uri, headers)
         if uri.startswith("gs://"):
             key = uri[len(f"gs://{self._bucket.name}/"):]
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(key).suffix)
