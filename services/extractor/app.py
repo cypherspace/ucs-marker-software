@@ -116,7 +116,7 @@ def _localise(uri: str, headers: dict[str, str] | None = None) -> Path:
 
 
 def _gemini_model_name() -> str:
-    return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    return os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 
 def _gemini_client():
