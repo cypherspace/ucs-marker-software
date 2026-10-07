@@ -1,14 +1,13 @@
-import { Router } from 'express';
+import { Router, type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { storage } from '../services/storage.js';
-import { isDriveUri, fileIdFromUri, getDownloadUrl, uploadFile, createExamFolder } from '../services/drive.js';
+import { uploadFile, createExamFolder } from '../services/drive.js';
 import { scriptPdfSource } from '../services/scriptSource.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
-import { requireClipAccess } from '../services/access.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -95,130 +94,219 @@ router.get('/exams/:id/scripts', requireAuth, async (req, res, next) => {
   }
 });
 
-// Trigger clipping job — calls Python extractor
-router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+// ── Clip generation ──────────────────────────────────────────────────────────
+// Clipping a whole class takes minutes (every script is fetched from storage and every clip
+// uploaded), longer than one Cloud Run request may last. So the browser drives it in small
+// steps: `plan` lists the scripts, `step` clips up to a few scripts per request, `finish`
+// does the mark scheme and marks the exam as ready. The old single-call route is kept and
+// simply runs the same steps in one go.
+
+interface ClipExam {
+  id: string;
+  lead_teacher_id: string;
+  use_drive_storage: boolean;
+  drive_folder_id: string | null;
+  mark_scheme_pdf_url: string | null;
+}
+interface ClipScript { id: string; student_number: string; original_pdf_url: string }
+interface ClipQuestion {
+  id: string;
+  clip_coordinates: unknown[] | null;
+  name_zones: unknown[] | null;
+  ms_clip_coordinates: unknown[] | null;
+}
+interface Failure { status: number; error: string; code: string }
+
+const ClipBodySchema = z.object({ question_ids: z.array(z.string().uuid()).optional() });
+
+async function loadClipJob(
+  req: ExpressRequest, res: ExpressResponse, questionIds?: string[],
+): Promise<{ exam: ClipExam; scripts: ClipScript[]; questions: ClipQuestion[] } | null> {
+  const exam = await db('exams').where({ id: req.params.id }).first<ClipExam>(
+    'id', 'lead_teacher_id', 'use_drive_storage', 'drive_folder_id', 'mark_scheme_pdf_url',
+  );
+  if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return null; }
+  const user = req.user!;
+  if (user.role !== 'admin' && exam.lead_teacher_id !== user.sub) {
+    res.status(403).json({ error: 'Only the exam\'s lead teacher can generate clips', code: 'FORBIDDEN' }); return null;
+  }
+  const scripts = await db('student_scripts').where({ exam_id: exam.id }).orderBy('student_number')
+    .select<ClipScript[]>('id', 'student_number', 'original_pdf_url');
+  const questionsQuery = db('exam_questions').where({ exam_id: exam.id });
+  if (questionIds) questionsQuery.whereIn('id', questionIds);
+  const questions = await questionsQuery.select<ClipQuestion[]>('id', 'clip_coordinates', 'name_zones', 'ms_clip_coordinates');
+  if (!scripts.length) { res.status(422).json({ error: 'No scripts uploaded', code: 'NO_SCRIPTS' }); return null; }
+  if (!questions.length) { res.status(422).json({ error: 'No questions defined', code: 'NO_QUESTIONS' }); return null; }
+  return { exam, scripts, questions };
+}
+
+// Clip every question for one script. Clips chosen by hand for this script are left alone.
+// `fatal` means every other script would fail the same way (the clipping service is down).
+async function clipOneScript(
+  exam: ClipExam, script: ClipScript, questions: ClipQuestion[],
+): Promise<{ made: number; kept: number } | (Failure & { fatal: boolean })> {
+  const manual = new Set((await db('script_clips')
+    .where({ script_id: script.id, clip_source: 'manual' })
+    .whereIn('question_id', questions.map((q) => q.id))
+    .select<{ question_id: string }[]>('question_id')).map((r) => r.question_id));
+  const todo = questions.filter((q) => !manual.has(q.id));
+  if (!todo.length) return { made: 0, kept: manual.size };
+
+  let src;
   try {
-    const exam = await db('exams').where({ id: req.params.id }).first();
-    if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return; }
-    const { question_ids } = z.object({ question_ids: z.array(z.string().uuid()).optional() }).parse(req.body ?? {});
-    const scripts = await db('student_scripts').where({ exam_id: req.params.id });
-    const questionsQuery = db('exam_questions').where({ exam_id: req.params.id });
-    if (question_ids) questionsQuery.whereIn('id', question_ids);
-    const questions = await questionsQuery;
+    src = await scriptPdfSource(script.original_pdf_url, exam.lead_teacher_id);
+  } catch (err) {
+    return { status: 502, error: `Could not open the script: ${(err as Error).message}`, code: 'SCRIPT_UNAVAILABLE', fatal: false };
+  }
 
-    if (!scripts.length) { res.status(422).json({ error: 'No scripts uploaded', code: 'NO_SCRIPTS' }); return; }
-    if (!questions.length) { res.status(422).json({ error: 'No questions defined', code: 'NO_QUESTIONS' }); return; }
+  let resp: Response;
+  try {
+    resp = await extractorFetch('/clip-scripts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        scripts: [{ id: script.id, student_number: script.student_number, pdf_url: src.url, pdf_headers: src.headers }],
+        questions: todo.map((q) => ({ id: q.id, clip_coordinates: q.clip_coordinates ?? [], name_zones: q.name_zones ?? [] })),
+      }),
+    });
+  } catch (err) {
+    console.error('Extractor unreachable:', err);
+    return {
+      status: 502, code: 'EXTRACTOR_UNREACHABLE', fatal: true,
+      error: `Could not reach the clipping service: ${describeExtractorFailure(err)}`,
+    };
+  }
+  if (!resp.ok) {
+    const body = await resp.text();
+    console.error(`Extractor clip error (${resp.status}):`, body);
+    let detail = '';
+    try { detail = String((JSON.parse(body) as { detail?: unknown }).detail ?? ''); } catch { /* not JSON */ }
+    return {
+      status: 502, code: 'EXTRACTOR_ERROR', fatal: false,
+      error: `Clipping failed (extractor returned ${resp.status}${detail ? `: ${detail}` : ''})`,
+    };
+  }
+  const result = (await resp.json()) as { clips: { script_id: string; question_id: string; clip_image_url: string }[] };
 
-    // Resolve URIs for the extractor; Drive URIs need a temporary download URL
-    const scriptPayload = await Promise.all(scripts.map(async (s) => {
-      const src = await scriptPdfSource(s.original_pdf_url, exam.lead_teacher_id);
-      return { id: s.id, student_number: s.student_number, pdf_url: src.url, pdf_headers: src.headers };
+  // Move the clip images into the lead teacher's Drive when the exam stores files there
+  if (exam.use_drive_storage && exam.drive_folder_id) {
+    await Promise.all(result.clips.map(async (c) => {
+      try {
+        c.clip_image_url = await uploadFile(
+          exam.lead_teacher_id, exam.drive_folder_id!, `clip_${c.question_id}_${c.script_id}.png`,
+          await storage.read(c.clip_image_url), 'image/png',
+        );
+      } catch (err) {
+        console.error('[drive] Clip upload failed:', (err as Error).message);
+      }
     }));
+  }
 
-    // Clips chosen by hand for one script must survive a bulk run
-    const questionIdSet = new Set(questions.map((q) => q.id));
-    const manualPairs = (await db('script_clips as sc')
-      .join('student_scripts as ss', 'ss.id', 'sc.script_id')
-      .where('ss.exam_id', req.params.id)
-      .where('sc.clip_source', 'manual')
-      .select<{ script_id: string; question_id: string }[]>('sc.script_id', 'sc.question_id'))
-      .filter((p) => questionIdSet.has(p.question_id));
+  if (result.clips.length) {
+    await db('script_clips')
+      .insert(result.clips.map((c) => ({ script_id: c.script_id, question_id: c.question_id, clip_image_url: c.clip_image_url })))
+      .onConflict(['script_id', 'question_id']).merge(['clip_image_url']);
+  }
+  return { made: result.clips.length, kept: manual.size };
+}
 
-    const questionPayload = questions.map((q) => ({
-      id: q.id,
-      clip_coordinates: q.clip_coordinates ?? [],
-      name_zones: q.name_zones ?? [],
-    }));
-
-    let resp: Response;
+// One mark-scheme clip per question (not per script), stored on the question, then the exam is ready to mark.
+async function finishClipping(exam: ClipExam, questions: ClipQuestion[]): Promise<number> {
+  let created = 0;
+  const msQuestions = questions.filter((q) => Array.isArray(q.ms_clip_coordinates) && q.ms_clip_coordinates.length);
+  if (exam.mark_scheme_pdf_url && msQuestions.length) {
     try {
-      resp = await extractorFetch('/clip-scripts', {
+      const msResp = await extractorFetch('/clip-mark-scheme', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ scripts: scriptPayload, questions: questionPayload, skip: manualPairs }),
+        body: JSON.stringify({
+          ms_pdf_url: storage.rawUri(exam.mark_scheme_pdf_url),
+          questions: msQuestions.map((q) => ({ id: q.id, ms_clip_coordinates: q.ms_clip_coordinates })),
+        }),
       });
-    } catch (err) {
-      console.error('Extractor unreachable:', err);
-      res.status(502).json({
-        error: `Could not reach the clipping service: ${describeExtractorFailure(err)}`,
-        code: 'EXTRACTOR_UNREACHABLE',
-      });
-      return;
-    }
-    if (!resp.ok) {
-      const body = await resp.text();
-      console.error(`Extractor clip error (${resp.status}):`, body);
-      let detail = '';
-      try { detail = String((JSON.parse(body) as { detail?: unknown }).detail ?? ''); } catch { /* not JSON */ }
-      res.status(502).json({
-        error: `Clipping failed (extractor returned ${resp.status}${detail ? `: ${detail}` : ''})`,
-        code: 'EXTRACTOR_ERROR',
-      }); return;
-    }
-    const result = (await resp.json()) as { clips: { script_id: string; question_id: string; clip_image_url: string }[] };
-
-    // Re-upload clip PNGs to Drive if exam uses Drive storage
-    if (exam.use_drive_storage && exam.drive_folder_id && result.clips.length) {
-      for (const c of result.clips) {
-        try {
-          const imgBytes = await storage.read(c.clip_image_url);
-          const driveUri = await uploadFile(
-            exam.lead_teacher_id,
-            exam.drive_folder_id,
-            `clip_${c.question_id}_${c.script_id}.png`,
-            imgBytes,
-            'image/png',
-          );
-          c.clip_image_url = driveUri;
-        } catch (err) {
-          console.error('[drive] Clip upload failed:', (err as Error).message);
+      if (msResp.ok) {
+        const msResult = (await msResp.json()) as { clips: { question_id: string; ms_clip_image_url: string }[] };
+        for (const c of msResult.clips) {
+          await db('exam_questions').where({ id: c.question_id }).update({ ms_clip_image_url: c.ms_clip_image_url });
         }
+        created = msResult.clips.length;
+      } else {
+        console.error('Mark scheme clip error:', await msResp.text());
+      }
+    } catch (msErr) {
+      console.error('Mark scheme clipping failed:', msErr);
+    }
+  }
+  await db('exams').where({ id: exam.id }).update({ status: 'marking' });
+  return created;
+}
+
+const clipAuth = [requireAuth, requireRole(['teacher', 'admin'])];
+
+// 1. Which scripts need clipping
+router.post('/exams/:id/clip/plan', ...clipAuth, async (req, res, next) => {
+  try {
+    const { question_ids } = ClipBodySchema.parse(req.body ?? {});
+    const job = await loadClipJob(req, res, question_ids);
+    if (!job) return;
+    res.json({ data: { script_ids: job.scripts.map((s) => s.id), questions: job.questions.length } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 2. Clip a few scripts (one failed script does not stop the rest; an unreachable service does)
+router.post('/exams/:id/clip/step', ...clipAuth, async (req, res, next) => {
+  try {
+    const body = ClipBodySchema.extend({ script_ids: z.array(z.string().uuid()).min(1).max(5) }).parse(req.body ?? {});
+    const job = await loadClipJob(req, res, body.question_ids);
+    if (!job) return;
+    const results: { id: string; ok: boolean; error?: string; clips?: number; kept?: number }[] = [];
+    for (const id of body.script_ids) {
+      const script = job.scripts.find((s) => s.id === id);
+      if (!script) { results.push({ id, ok: false, error: 'Script not found' }); continue; }
+      const out = await clipOneScript(job.exam, script, job.questions);
+      if ('error' in out) {
+        if (out.fatal) { res.status(out.status).json({ error: out.error, code: out.code }); return; }
+        results.push({ id, ok: false, error: out.error });
+      } else {
+        results.push({ id, ok: true, clips: out.made, kept: out.kept });
       }
     }
+    res.json({ data: { results } });
+  } catch (err) {
+    next(err);
+  }
+});
 
-    // Save clips to DB
-    if (result.clips.length) {
-      await db('script_clips')
-        .insert(result.clips.map((c) => ({
-          script_id: c.script_id,
-          question_id: c.question_id,
-          clip_image_url: c.clip_image_url,
-        })))
-        .onConflict(['script_id', 'question_id']).merge(['clip_image_url']);
+// 3. Mark scheme and status
+router.post('/exams/:id/clip/finish', ...clipAuth, async (req, res, next) => {
+  try {
+    const { question_ids } = ClipBodySchema.parse(req.body ?? {});
+    const job = await loadClipJob(req, res, question_ids);
+    if (!job) return;
+    res.json({ data: { ms_clips_created: await finishClipping(job.exam, job.questions) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Everything in one request (fine for a handful of scripts; the setup page uses the steps above)
+router.post('/exams/:id/clip', ...clipAuth, async (req, res, next) => {
+  try {
+    const { question_ids } = ClipBodySchema.parse(req.body ?? {});
+    const job = await loadClipJob(req, res, question_ids);
+    if (!job) return;
+    let made = 0;
+    let kept = 0;
+    for (const script of job.scripts) {
+      const out = await clipOneScript(job.exam, script, job.questions);
+      if ('error' in out) { res.status(out.status).json({ error: out.error, code: out.code }); return; }
+      made += out.made;
+      kept = Math.max(kept, out.kept);
     }
-
-    // Clip the mark scheme too, if one has been uploaded and any question has
-    // MS regions defined. One MS clip per question, stored on the question.
-    let msClipsCreated = 0;
-    const msQuestions = questions.filter((q) => Array.isArray(q.ms_clip_coordinates) && q.ms_clip_coordinates.length);
-    if (exam?.mark_scheme_pdf_url && msQuestions.length) {
-      try {
-        const msResp = await extractorFetch('/clip-mark-scheme', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            ms_pdf_url: storage.rawUri(exam.mark_scheme_pdf_url),
-            questions: msQuestions.map((q) => ({ id: q.id, ms_clip_coordinates: q.ms_clip_coordinates })),
-          }),
-        });
-        if (msResp.ok) {
-          const msResult = (await msResp.json()) as { clips: { question_id: string; ms_clip_image_url: string }[] };
-          for (const c of msResult.clips) {
-            await db('exam_questions').where({ id: c.question_id }).update({ ms_clip_image_url: c.ms_clip_image_url });
-          }
-          msClipsCreated = msResult.clips.length;
-        } else {
-          console.error('Mark scheme clip error:', await msResp.text());
-        }
-      } catch (msErr) {
-        console.error('Mark scheme clipping failed:', msErr);
-      }
-    }
-
-    // Update exam status to marking
-    await db('exams').where({ id: req.params.id }).update({ status: 'marking' });
-
-    res.json({ data: { clips_created: result.clips.length, ms_clips_created: msClipsCreated, manual_clips_kept: manualPairs.length } });
+    const ms = await finishClipping(job.exam, job.questions);
+    res.json({ data: { clips_created: made, ms_clips_created: ms, manual_clips_kept: kept } });
   } catch (err) {
     next(err);
   }
@@ -298,29 +386,6 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'private, max-age=300');
     res.send(Buffer.from(await resp.arrayBuffer()));
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Get a signed/local URL for a script's full PDF. Unmasked, so lead teacher / admin only;
-// markers browse pages through /scripts/:scriptId/render, which hides name zones.
-router.get('/clips/:id/script', requireAuth, async (req, res, next) => {
-  try {
-    if (!(await requireClipAccess(req, res, req.params.id, { leadOnly: true }))) return;
-    const clip = await db('script_clips as sc')
-      .join('student_scripts as ss', 'ss.id', 'sc.script_id')
-      .join('exams as e', 'e.id', 'ss.exam_id')
-      .where('sc.id', req.params.id)
-      .first<{ original_pdf_url: string; lead_teacher_id: string }>();
-    if (!clip) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
-    let url: string;
-    if (isDriveUri(clip.original_pdf_url)) {
-      url = await getDownloadUrl(clip.lead_teacher_id, fileIdFromUri(clip.original_pdf_url));
-    } else {
-      url = await storage.publicUrl(clip.original_pdf_url);
-    }
-    res.json({ data: { url } });
   } catch (err) {
     next(err);
   }

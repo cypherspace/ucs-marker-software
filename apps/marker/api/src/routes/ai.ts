@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { config } from '../config.js';
 import { storage } from '../services/storage.js';
-import { fileIdFromUri, getDownloadUrl, isDriveUri } from '../services/drive.js';
+import { fileIdFromUri, getDriveMediaRequest, isDriveUri } from '../services/drive.js';
 import { describeExtractorFailure, extractorFetch } from '../services/extractor.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireClipAccess, requireQuestionAccess, type ClipContext } from '../services/access.js';
@@ -35,16 +35,16 @@ router.post('/clips/:id/ocr', requireAuth, async (req, res, next) => {
     if (config.aiStub) {
       text = 'Stub transcription (AI_STUB)';
     } else {
-      // The extractor reads local/GCS paths and https URLs; Drive clips need a temporary download URL.
-      const imageUrl = isDriveUri(clip.clip_image_url)
-        ? await getDownloadUrl(clip.lead_teacher_id, fileIdFromUri(clip.clip_image_url))
-        : storage.rawUri(clip.clip_image_url);
+      // The extractor reads local/GCS paths and https URLs; Drive clips need the lead teacher's token, sent as a header.
+      const image = isDriveUri(clip.clip_image_url)
+        ? await getDriveMediaRequest(clip.lead_teacher_id, fileIdFromUri(clip.clip_image_url))
+        : { url: storage.rawUri(clip.clip_image_url), headers: undefined };
       let resp: Response;
       try {
         resp = await extractorFetch('/ocr', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ image_url: imageUrl }),
+          body: JSON.stringify({ image_url: image.url, image_headers: image.headers }),
         });
       } catch (err) {
         res.status(502).json({ error: `Could not reach the text recognition service: ${describeExtractorFailure(err)}`, code: 'EXTRACTOR_UNREACHABLE' }); return;

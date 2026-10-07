@@ -3,7 +3,7 @@ import type {
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
-  ComparativeStatus, ComparativeNextPair, Ranking, ClipSettings, ClipRegion, NameZone,
+  ComparativeStatus, ComparativeNextPair, Ranking, ClipSettings, ClipRegion, NameZone, ClipListItem,
 } from '@marker/shared-types';
 
 export class HttpError extends Error {
@@ -92,6 +92,28 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(questionIds ? { question_ids: questionIds } : {}),
     }),
+  // Clipping in small steps (a class is too much for one request)
+  planClipping: (examId: string, questionIds?: string[]) =>
+    http<ApiSuccess<{ script_ids: string[]; questions: number }>>(`${A}/exams/${examId}/clip/plan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(questionIds ? { question_ids: questionIds } : {}),
+    }),
+  clipStep: (examId: string, scriptIds: string[], questionIds?: string[]) =>
+    http<ApiSuccess<{ results: { id: string; ok: boolean; error?: string; clips?: number; kept?: number }[] }>>(
+      `${A}/exams/${examId}/clip/step`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ script_ids: scriptIds, ...(questionIds ? { question_ids: questionIds } : {}) }),
+      },
+    ),
+  finishClipping: (examId: string, questionIds?: string[]) =>
+    http<ApiSuccess<{ ms_clips_created: number }>>(`${A}/exams/${examId}/clip/finish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(questionIds ? { question_ids: questionIds } : {}),
+    }),
   uploadMarkScheme: (examId: string, file: File) => {
     const form = new FormData();
     form.append('mark_scheme', file);
@@ -139,9 +161,15 @@ export const api = {
 
   // Marking
   myExams: () => http<ApiSuccess<(Exam & { assigned_questions: ExamQuestion[] })[]>>(`${A}/my-exams`),
-  getNextClip: (examId: string, questionId: string) =>
-    http<ApiSuccess<QueueClip | null>>(`${A}/exams/${examId}/queue/${questionId}`),
-  saveMark: (body: { clip_id: string; marks_awarded: number; annotation_data: AnnotationData }) =>
+  // The clip asked for, or the first one this teacher hasn't finished
+  getNextClip: (examId: string, questionId: string, clipId?: string) =>
+    http<ApiSuccess<QueueClip | null>>(
+      `${A}/exams/${examId}/queue/${questionId}${clipId ? `?clip_id=${encodeURIComponent(clipId)}` : ''}`,
+    ),
+  listClips: (examId: string, questionId: string) =>
+    http<ApiSuccess<ClipListItem[]>>(`${A}/exams/${examId}/questions/${questionId}/clips`),
+  // draft: an automatic save when leaving a clip; it keeps the ticks without counting the clip as marked
+  saveMark: (body: { clip_id: string; marks_awarded: number | null; annotation_data: AnnotationData; draft?: boolean }) =>
     http<ApiSuccess<ScriptMark>>(`${A}/marks`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

@@ -90,6 +90,7 @@ export function App() {
           <Route path="/exams/:id/setup" element={<ExamSetup />} />
           <Route path="/exams/:id/progress" element={<ExamProgress />} />
           <Route path="/mark/:examId/:questionId" element={<MarkingInterface />} />
+          <Route path="/mark/:examId/:questionId/:clipId" element={<MarkingInterface />} />
           <Route path="/compare/:examId/:questionId" element={<ComparativeMarking />} />
           <Route path="/compare/:examId/:questionId/ranking" element={<ComparativeRanking />} />
           <Route path="/exams/:id/ai" element={<AiMarking />} />

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { storage } from '../services/storage.js';
-import { isDriveUri, fileIdFromUri, getDownloadUrl } from '../services/drive.js';
+import { getClipBytes } from '../services/clipImages.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireClipAccess, requireQuestionAccess } from '../services/access.js';
 
@@ -10,7 +10,7 @@ const router = Router();
 
 const AnnotationSchema = z.object({
   id: z.string(),
-  type: z.enum(['tick', 'cross', 'numbered_tick', 'numbered_cross', 'circle', 'underline', 'ruler', 'text']),
+  type: z.enum(['tick', 'cross', 'numbered_tick', 'numbered_cross', 'circle', 'underline', 'ruler', 'text', 'mark_tick']),
   x: z.number(),
   y: z.number(),
   color: z.string(),
@@ -22,35 +22,76 @@ const AnnotationSchema = z.object({
 
 const SaveMarkSchema = z.object({
   clip_id: z.string().uuid(),
-  marks_awarded: z.number().int().min(0).max(100),
+  // Required for a real save; a draft may have none yet
+  marks_awarded: z.number().int().min(0).max(100).nullable().optional(),
   annotation_data: z.object({ annotations: z.array(AnnotationSchema) }),
+  // Automatic save when leaving a clip: keeps ticks and any typed mark without counting the clip as marked
+  draft: z.boolean().optional(),
 });
 
-// Get next unmarked clip for a teacher on a specific question
+type ClipState = 'marked' | 'draft' | 'unmarked';
+
+// This teacher's clips for a question in a stable order (by script number, which markers
+// only ever see as a position), with how far along each one is for them.
+async function clipList(questionId: string, teacherId: string): Promise<{ id: string; state: ClipState }[]> {
+  const result = await db.raw(
+    `SELECT sc.id,
+            CASE
+              WHEN EXISTS (SELECT 1 FROM script_marks sm WHERE sm.clip_id = sc.id AND sm.marker_id = ?
+                              AND sm.mark_source = 'human' AND sm.status <> 'pending') THEN 'marked'
+              WHEN EXISTS (SELECT 1 FROM script_marks sm WHERE sm.clip_id = sc.id AND sm.marker_id = ?
+                              AND sm.mark_source = 'human') THEN 'draft'
+              ELSE 'unmarked'
+            END AS state
+       FROM script_clips sc
+       JOIN student_scripts ss ON ss.id = sc.script_id
+      WHERE sc.question_id = ?
+      ORDER BY ss.student_number, sc.id`,
+    [teacherId, teacherId, questionId],
+  );
+  return result.rows as { id: string; state: ClipState }[];
+}
+
+// The clips for a question, for the jump menu on the marking page
+router.get('/exams/:examId/questions/:questionId/clips', requireAuth, async (req, res, next) => {
+  try {
+    const access = await requireQuestionAccess(req, res, req.params.questionId, { examId: req.params.examId });
+    if (!access) return;
+    res.json({ data: await clipList(req.params.questionId, req.user!.sub) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// One clip for this teacher to mark: the one asked for (?clip_id=), else the first they haven't finished.
 router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, next) => {
   try {
     const teacherId = req.user!.sub;
     const access = await requireQuestionAccess(req, res, req.params.questionId, { examId: req.params.examId });
     if (!access) return;
 
-    // Find a clip for this question that this teacher hasn't marked yet
+    const list = await clipList(req.params.questionId, teacherId);
+    const wanted = typeof req.query.clip_id === 'string' ? req.query.clip_id : null;
+    let index: number;
+    if (wanted) {
+      index = list.findIndex((c) => c.id === wanted);
+      if (index < 0) { res.status(404).json({ error: 'Clip not found for this question', code: 'NOT_FOUND' }); return; }
+    } else {
+      index = list.findIndex((c) => c.state !== 'marked');
+      if (index < 0) {
+        res.json({ data: null, meta: { message: 'All clips marked', total: list.length, first_id: list[0]?.id ?? null } }); return;
+      }
+    }
+
+    // Select sc columns explicitly: an implicit `select *` over a join lets a NULL right-side id shadow sc.id.
     const clip = await db('script_clips as sc')
-      .leftJoin('script_marks as sm', function () {
-        this.on('sm.clip_id', 'sc.id').andOn('sm.marker_id', db.raw('?', [teacherId]));
-      })
-      .where('sc.question_id', req.params.questionId)
-      .whereNull('sm.id')
-      .orderBy('sc.created_at')
-      // Select sc columns explicitly: an implicit `select *` over the join lets
-      // sm.id (NULL here) shadow sc.id, returning a null clip id.
+      .where('sc.id', list[index].id)
       .first<{
-        id: string; clip_image_url: string; script_id: string; question_id: string; ocr_text: string | null;
+        id: string; script_id: string; ocr_text: string | null;
         clip_source: string; reclipped_at: string | null; changed_after_marking: boolean;
       }>(
         'sc.id as id',
-        'sc.clip_image_url as clip_image_url',
         'sc.script_id as script_id',
-        'sc.question_id as question_id',
         'sc.ocr_text as ocr_text',
         'sc.clip_source as clip_source',
         'sc.reclipped_at as reclipped_at',
@@ -59,23 +100,13 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
           SELECT 1 FROM script_marks hm
            WHERE hm.clip_id = sc.id AND hm.mark_source = 'human' AND hm.marked_at < sc.reclipped_at)) AS changed_after_marking`),
       );
+    if (!clip) { res.status(404).json({ error: 'Clip not found', code: 'NOT_FOUND' }); return; }
 
-    if (!clip) {
-      res.json({ data: null, meta: { message: 'All clips marked' } }); return;
-    }
-
-    // Get the question for max_marks
     const question = await db('exam_questions').where({ id: req.params.questionId }).first();
 
-    // Resolve clip image URL (Drive or local/GCS)
-    let clipUrl: string;
-    if (isDriveUri(clip.clip_image_url)) {
-      clipUrl = await getDownloadUrl(access.lead_teacher_id, fileIdFromUri(clip.clip_image_url));
-    } else {
-      clipUrl = await storage.publicUrl(clip.clip_image_url);
-      // Local storage serves a clip from the same path every time; stamp it so a re-selected clip isn't shown from the browser's cache
-      if (clipUrl.startsWith('/files/') && clip.reclipped_at) clipUrl += `?v=${new Date(clip.reclipped_at).getTime()}`;
-    }
+    // The clip image is served by this API (same origin), so the canvas can read it whatever the storage.
+    const version = clip.reclipped_at ? new Date(clip.reclipped_at).getTime() : 0;
+    const clipUrl = `/api/v1/clips/${clip.id}/image?v=${version}`;
 
     // Mark-scheme clip URL, if one was produced during clipping
     let msUrl: string | null = null;
@@ -90,15 +121,12 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
         'marks_awarded', 'ai_reasoning', 'ai_feedback', 'ai_model',
       );
 
-    // Total remaining
-    const remaining = await db('script_clips as sc')
-      .leftJoin('script_marks as sm', function () {
-        this.on('sm.clip_id', 'sc.id').andOn('sm.marker_id', db.raw('?', [teacherId]));
-      })
-      .where('sc.question_id', req.params.questionId)
-      .whereNull('sm.id')
-      .count('sc.id as n')
-      .first<{ n: string }>();
+    // This teacher's own saved ticks and mark, so revisiting a clip shows them
+    const mine = await db('script_marks')
+      .where({ clip_id: clip.id, marker_id: teacherId, mark_source: 'human' })
+      .first<{ marks_awarded: number | null; annotation_data: unknown; status: string }>('marks_awarded', 'annotation_data', 'status');
+
+    const nextUnmarked = [...list.slice(index + 1), ...list.slice(0, index)].find((c) => c.state !== 'marked');
 
     res.json({
       data: {
@@ -110,7 +138,16 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
         clip_url: clipUrl,
         ms_url: msUrl,
         question,
-        remaining: Number(remaining?.n ?? 0),
+        remaining: list.filter((c) => c.state !== 'marked').length,
+        position: index + 1,
+        total: list.length,
+        prev_id: list[index - 1]?.id ?? null,
+        next_id: list[index + 1]?.id ?? null,
+        next_unmarked_id: nextUnmarked?.id ?? null,
+        state: list[index].state,
+        my_mark: mine
+          ? { marks_awarded: mine.marks_awarded, annotation_data: mine.annotation_data, status: mine.status }
+          : null,
         ai_mark: ai
           ? { marks_awarded: ai.marks_awarded, reasoning: ai.ai_reasoning, feedback: ai.ai_feedback, model: ai.ai_model }
           : null,
@@ -122,7 +159,7 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
   }
 });
 
-// Save a mark
+// Save a mark, or (draft) just the ticks and any typed mark
 router.post('/marks', requireAuth, async (req, res, next) => {
   try {
     const body = SaveMarkSchema.parse(req.body);
@@ -132,22 +169,32 @@ router.post('/marks', requireAuth, async (req, res, next) => {
     const clip = await requireClipAccess(req, res, body.clip_id);
     if (!clip) return;
 
-    if (body.marks_awarded > clip.max_marks) {
+    if (body.marks_awarded != null && body.marks_awarded > clip.max_marks) {
       res.status(422).json({ error: `Marks exceed max (${clip.max_marks})`, code: 'MARKS_EXCEED_MAX' }); return;
     }
+    if (!body.draft && body.marks_awarded == null) {
+      res.status(422).json({ error: 'Enter a mark before saving', code: 'MARKS_REQUIRED' }); return;
+    }
 
+    const existing = await db('script_marks')
+      .where({ clip_id: body.clip_id, marker_id: teacherId, mark_source: 'human' })
+      .first<{ status: string; marks_awarded: number | null }>('status', 'marks_awarded');
+    const finalised = Boolean(existing && existing.status !== 'pending');
+
+    // A draft never un-marks a clip that was already saved: it only updates the ticks (and the mark if one is given)
+    const status = body.draft ? (finalised ? existing!.status : 'pending') : 'marked';
+    const marks = body.marks_awarded ?? (finalised ? existing!.marks_awarded : null);
+
+    const values = {
+      marks_awarded: marks,
+      annotation_data: JSON.stringify(body.annotation_data),
+      status,
+      ...(body.draft ? {} : { marked_at: db.fn.now() }),
+    };
     const [mark] = await db('script_marks')
-      .insert({
-        clip_id: body.clip_id,
-        marker_id: teacherId,
-        mark_source: 'human',
-        marks_awarded: body.marks_awarded,
-        annotation_data: JSON.stringify(body.annotation_data),
-        status: 'marked',
-        marked_at: db.fn.now(),
-      })
+      .insert({ clip_id: body.clip_id, marker_id: teacherId, mark_source: 'human', ...values })
       .onConflict(['clip_id', 'marker_id'])
-      .merge(['marks_awarded', 'annotation_data', 'status', 'marked_at'])
+      .merge(values)
       .returning('*');
 
     res.status(201).json({ data: mark });
@@ -193,18 +240,16 @@ router.get('/my-exams', requireAuth, async (req, res, next) => {
   }
 });
 
-// Serve clip image, handling Drive and local/GCS — frontend always uses this for <img> src
+// The clip image itself, streamed by this API so the browser always loads it from our own origin
+// (Drive and the storage bucket both refuse the cross-origin read the canvas needs).
 router.get('/clips/:id/image', requireAuth, async (req, res, next) => {
   try {
     const clip = await requireClipAccess(req, res, req.params.id);
     if (!clip) return;
-    let url: string;
-    if (isDriveUri(clip.clip_image_url)) {
-      url = await getDownloadUrl(clip.lead_teacher_id, fileIdFromUri(clip.clip_image_url));
-    } else {
-      url = await storage.publicUrl(clip.clip_image_url);
-    }
-    res.redirect(302, url);
+    const bytes = await getClipBytes(clip.clip_image_url, clip.lead_teacher_id);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.send(bytes);
   } catch (err) {
     next(err);
   }
