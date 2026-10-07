@@ -48,9 +48,16 @@ class QuestionInput(BaseModel):
     name_zones: list[dict[str, Any]] | None = None
 
 
+class SkipPair(BaseModel):
+    script_id: str
+    question_id: str
+
+
 class ClipScriptsRequest(BaseModel):
     scripts: list[ScriptInput]
     questions: list[QuestionInput]
+    # Script/question pairs with a hand-made clip, which a bulk run must not overwrite
+    skip: list[SkipPair] | None = None
 
 
 class ClipResult(BaseModel):
@@ -95,6 +102,7 @@ class RenderRequest(BaseModel):
     pdf_headers: dict[str, str] | None = None
     page_number: int
     max_width: int = 1200
+    mask_zones: list[dict[str, Any]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +147,11 @@ def clip_scripts(req: ClipScriptsRequest):
     4. Return the storage URI for each clip.
     """
     clips: list[ClipResult] = []
+    skip = {(s.script_id, s.question_id) for s in req.skip or []}
 
     for script in req.scripts:
+        if skip and all((script.id, q.id) in skip for q in req.questions):
+            continue
         try:
             pdf_path = _localise(script.pdf_url, script.pdf_headers)
         except Exception as exc:
@@ -148,6 +159,8 @@ def clip_scripts(req: ClipScriptsRequest):
             raise HTTPException(status_code=422, detail=f"Cannot access PDF for script {script.id}: {exc}")
 
         for question in req.questions:
+            if (script.id, question.id) in skip:
+                continue
             coords = question.clip_coordinates
             if not coords:
                 logger.warning("Question %s has no clip_coordinates — skipping", question.id)
@@ -278,7 +291,7 @@ def render(req: RenderRequest):
         raise HTTPException(status_code=422, detail=f"Cannot access PDF: {exc}")
 
     try:
-        png_bytes, page_count = render_page(pdf_path, req.page_number, req.max_width)
+        png_bytes, page_count = render_page(pdf_path, req.page_number, req.max_width, req.mask_zones)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

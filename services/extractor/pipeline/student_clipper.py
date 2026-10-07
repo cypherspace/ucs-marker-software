@@ -104,8 +104,16 @@ def clip_question(
     return buf.getvalue()
 
 
-def render_page(pdf_path: Path, page_number: int, max_width: int = 1200) -> tuple[bytes, int]:
+def render_page(
+    pdf_path: Path,
+    page_number: int,
+    max_width: int = 1200,
+    mask_zones: list[dict] | None = None,
+) -> tuple[bytes, int]:
     """Render a single PDF page to PNG for the CoordinatePicker admin UI.
+
+    mask_zones (ClipRegion dicts) are blacked out on this page before rendering,
+    in memory only, so markers browsing a script never see student names.
 
     Returns (png_bytes, total_page_count) so the UI can bound page navigation.
     """
@@ -115,6 +123,9 @@ def render_page(pdf_path: Path, page_number: int, max_width: int = 1200) -> tupl
         if page_number < 1 or page_number > total:
             raise ValueError(f"Page {page_number} out of range (document has {total} pages)")
         page = doc[page_number - 1]
+        for zone in mask_zones or []:
+            if int(zone["page"]) == page_number:
+                page.draw_rect(_rect_from_coords(zone), color=None, fill=(0, 0, 0))
         scale = min(1.0, max_width / page.rect.width) * (_SCALE / 1.0)
         mat = fitz.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat, alpha=False)
