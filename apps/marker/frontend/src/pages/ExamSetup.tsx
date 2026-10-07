@@ -12,6 +12,8 @@ import {
   type RegionType,
 } from '../components/CoordinatePicker';
 import { DrivePicker, driveConfigured } from '../components/DrivePicker';
+import { UploadQueuePanel } from '../components/UploadQueuePanel';
+import { useUploadQueue } from '../hooks/useUploadQueue';
 
 type SetupTab = 'scripts' | 'questions' | 'assign';
 
@@ -39,13 +41,9 @@ export function ExamSetup() {
   const progressByQuestion = new Map((progressQ.data?.data.questions ?? []).map((p) => [p.question_id, p]));
 
   // ── Script upload ─────────────────────────────────────────────────────────
-  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
-  const uploadMutation = useMutation({
-    mutationFn: () => api.uploadScripts(id!, uploadFiles),
-    onSuccess: () => {
-      setUploadFiles([]);
-      qc.invalidateQueries({ queryKey: ['scripts', id] });
-    },
+  // One request per PDF, in name order, so a big or failing file doesn't sink the rest.
+  const scriptQueue = useUploadQueue((file) => api.uploadScripts(id!, [file]), {
+    onDone: () => qc.invalidateQueries({ queryKey: ['scripts', id] }),
   });
 
   const clipMutation = useMutation({
@@ -57,13 +55,9 @@ export function ExamSetup() {
   });
 
   // ── Mark scheme upload ────────────────────────────────────────────────────
-  const [msFile, setMsFile] = useState<File | null>(null);
-  const msUploadMutation = useMutation({
-    mutationFn: () => api.uploadMarkScheme(id!, msFile!),
-    onSuccess: () => {
-      setMsFile(null);
-      qc.invalidateQueries({ queryKey: ['exam', id] });
-    },
+  const msQueue = useUploadQueue((file) => api.uploadMarkScheme(id!, file), {
+    single: true,
+    onDone: () => qc.invalidateQueries({ queryKey: ['exam', id] }),
   });
 
   // ── Question definition ───────────────────────────────────────────────────
@@ -236,27 +230,30 @@ export function ExamSetup() {
               Upload one PDF per student. Scripts are automatically assigned student numbers (001, 002, …).
               Student names are <strong>never</strong> stored alongside the scripts — the system uses numbers only until export.
             </p>
-            {exam?.use_drive_storage && driveConfigured ? (
-              <DrivePicker onFiles={setUploadFiles} disabled={uploadMutation.isPending} />
-            ) : (
+            {exam?.use_drive_storage && driveConfigured && (
+              <DrivePicker
+                onPick={scriptQueue.addDrive}
+                disabled={scriptQueue.running}
+                title="Choose script PDFs"
+                buttonLabel="Choose from Google Drive"
+              />
+            )}
+            <label className="mb-3 block text-xs text-slate-500">
+              {exam?.use_drive_storage && driveConfigured ? 'Or upload from this computer' : 'Choose PDFs from this computer'}
               <input
                 type="file"
                 accept=".pdf"
                 multiple
-                onChange={(e) => setUploadFiles(Array.from(e.target.files ?? []))}
-                className="mb-3 block text-sm text-slate-600"
+                disabled={scriptQueue.running}
+                onChange={(e) => { scriptQueue.addFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }}
+                className="mt-1 block text-sm text-slate-600"
               />
-            )}
-            {uploadFiles.length > 0 && (
-              <p className="mb-3 text-sm text-slate-600">{uploadFiles.length} file(s) selected</p>
-            )}
-            <button
-              onClick={() => uploadMutation.mutate()}
-              disabled={uploadFiles.length === 0 || uploadMutation.isPending}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {uploadMutation.isPending ? 'Uploading…' : 'Upload Scripts'}
-            </button>
+            </label>
+            <p className="mb-3 text-xs text-slate-500">Files are numbered in name order, and each PDF can be up to 32 MB.</p>
+            <UploadQueuePanel
+              queue={scriptQueue}
+              buttonLabel={(n) => `Upload ${n} script${n === 1 ? '' : 's'}`}
+            />
           </div>
 
           <div className="rounded-lg border border-slate-200 bg-white p-4">
@@ -268,19 +265,29 @@ export function ExamSetup() {
             {exam?.mark_scheme_pdf_url && (
               <p className="mb-2 text-sm text-green-700">✓ Mark scheme uploaded</p>
             )}
-            <input
-              type="file"
-              accept=".pdf"
-              onChange={(e) => setMsFile(e.target.files?.[0] ?? null)}
-              className="mb-3 block text-sm text-slate-600"
+            {exam?.use_drive_storage && driveConfigured && (
+              <DrivePicker
+                multiple={false}
+                onPick={msQueue.addDrive}
+                disabled={msQueue.running}
+                title="Choose the mark scheme PDF"
+                buttonLabel="Choose from Google Drive"
+              />
+            )}
+            <label className="mb-3 block text-xs text-slate-500">
+              {exam?.use_drive_storage && driveConfigured ? 'Or upload from this computer' : 'Choose the mark scheme PDF'}
+              <input
+                type="file"
+                accept=".pdf"
+                disabled={msQueue.running}
+                onChange={(e) => { msQueue.addFiles(Array.from(e.target.files ?? []).slice(0, 1)); e.target.value = ''; }}
+                className="mt-1 block text-sm text-slate-600"
+              />
+            </label>
+            <UploadQueuePanel
+              queue={msQueue}
+              buttonLabel={() => (exam?.mark_scheme_pdf_url ? 'Replace Mark Scheme' : 'Upload Mark Scheme')}
             />
-            <button
-              onClick={() => msUploadMutation.mutate()}
-              disabled={!msFile || msUploadMutation.isPending}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {msUploadMutation.isPending ? 'Uploading…' : exam?.mark_scheme_pdf_url ? 'Replace Mark Scheme' : 'Upload Mark Scheme'}
-            </button>
           </div>
 
           {scripts.length > 0 && (

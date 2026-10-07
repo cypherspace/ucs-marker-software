@@ -5,7 +5,7 @@ UCS Automatic Marking System: online marking of scanned student exam scripts wit
 ## Layout
 
 - `apps/marker/api` — Express + TypeScript API (port 8080). In production it also serves the built frontend (SPA fallback).
-- `apps/marker/frontend` — React 19 + Vite + Tailwind (port 5173 in dev, proxies `/api /admin /auth /files` to 8080).
+- `apps/marker/frontend` — React 19 + Vite + Tailwind (port 5173 in dev, proxies `/api /admin/v1 /auth /files` to 8080; reads `VITE_*` from the repo-root `.env`).
 - `services/extractor` — Python FastAPI (PyMuPDF, Gemini): renders pages, clips regions, OCR. Port 8081 locally, `$PORT` on Cloud Run.
 - `infra/db/marker` — node-pg-migrate migrations (`00N_*.cjs`).
 - `packages/shared-types`, `packages/shared-middleware` — source-only packages (no build script, no `dist`). The frontend uses `shared-types` as type-only imports; the API does not import either at runtime.
@@ -35,6 +35,7 @@ UCS Automatic Marking System: online marking of scanned student exam scripts wit
 - Set `AI_STUB=1` to answer AI and transcription calls with deterministic fake output (no Gemini key needed) when testing locally.
 - Comparative marking: `exam_questions.marking_mode` is `marks` or `comparative`. Pairs live in `comparative_pairs` (one per two scripts per question, any order); judgements in `comparative_judgements` (one human and one AI per pair; a human judgement overrides the AI's). Ranking is Bradley-Terry (`services/ranking.ts`, unit-tested).
 - Deactivated users (`users.disabled_at`) keep their data but cannot sign in; every admin action and question edit/delete is written to `audit_log` via `services/audit.ts`.
+- Drive picker (`components/DrivePicker.tsx`): returns references only; PDFs are downloaded one at a time at upload time (`hooks/useUploadQueue.ts`, one request per file in name order) because Cloud Run rejects request bodies over 32 MB. The token is cached with its expiry. The picker shows folders, Shared with me and shared drives; with the narrow `drive.file` scope the app only gets the files the user picks (picking a folder does not grant its contents).
 - Unit tests: `npm test` (vitest, API only). Browser checks used Playwright against the dev servers.
 - TypeScript: after adding a column in a migration, update the `Exam`/etc. interfaces in `packages/shared-types/src/index.ts`, or `tsc -b` fails in the frontend build.
 
