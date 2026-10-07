@@ -21,3 +21,11 @@ export async function extractorFetch(path: string, init: RequestInit = {}): Prom
   if (base.startsWith('https://')) headers.set('Authorization', `Bearer ${await idToken(base)}`);
   return fetch(`${base}${path}`, { ...init, headers });
 }
+
+// Human-readable reason an extractor call failed before getting any HTTP response
+// (connection refused, DNS, or failing to obtain the Cloud Run ID token).
+export function describeExtractorFailure(err: unknown): string {
+  const e = err as { message?: string; cause?: { code?: string; message?: string } };
+  const detail = e.cause?.code ?? e.cause?.message;
+  return detail ? `${e.message ?? 'fetch failed'} (${detail})` : (e.message ?? 'unknown error');
+}

@@ -6,10 +6,12 @@ import type {
 export class HttpError extends Error {
   status: number;
   code?: string;
-  constructor(status: number, message: string, code?: string) {
+  body?: Record<string, unknown>;
+  constructor(status: number, message: string, code?: string, body?: Record<string, unknown>) {
     super(message);
     this.status = status;
     this.code = code;
+    this.body = body;
   }
 }
 
@@ -21,6 +23,7 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
       res.status,
       (body as { error?: string }).error ?? `HTTP ${res.status}`,
       (body as { code?: string }).code,
+      body as Record<string, unknown>,
     );
     if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
     throw err;
@@ -59,6 +62,8 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     }),
+  deleteQuestion: (examId: string, questionId: string, confirm = false) =>
+    http<ApiSuccess<{ ok: true }>>(`${A}/${examId}/questions/${questionId}${confirm ? '?confirm=1' : ''}`, { method: 'DELETE' }),
   updateQuestion: (examId: string, questionId: string, body: Partial<ExamQuestion>) =>
     http<ApiSuccess<ExamQuestion>>(`${A}/${examId}/questions/${questionId}`, {
       method: 'PATCH',
@@ -76,8 +81,12 @@ export const api = {
       body: form,
     });
   },
-  triggerClipping: (examId: string) =>
-    http<ApiSuccess<{ clips_created: number; ms_clips_created: number }>>(`${A}/exams/${examId}/clip`, { method: 'POST' }),
+  triggerClipping: (examId: string, questionIds?: string[]) =>
+    http<ApiSuccess<{ clips_created: number; ms_clips_created: number }>>(`${A}/exams/${examId}/clip`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(questionIds ? { question_ids: questionIds } : {}),
+    }),
   uploadMarkScheme: (examId: string, file: File) => {
     const form = new FormData();
     form.append('mark_scheme', file);
@@ -88,6 +97,22 @@ export const api = {
   },
   // URL for an <img> — renders a script PDF page to PNG via the extractor
   renderScriptPageUrl: (scriptId: string, page: number) => `${A}/scripts/${scriptId}/render?page=${page}`,
+  // Fetch a rendered page as an object URL so failures surface as real errors (status + message)
+  fetchScriptPage: async (scriptId: string, page: number): Promise<{ objectUrl: string; pageCount: number | null }> => {
+    const res = await fetch(`${A}/scripts/${scriptId}/render?page=${page}`, { credentials: 'include' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
+      throw new HttpError(
+        res.status,
+        (body as { error?: string }).error ?? `HTTP ${res.status}`,
+        (body as { code?: string }).code,
+        body as Record<string, unknown>,
+      );
+    }
+    const count = Number(res.headers.get('x-page-count'));
+    return { objectUrl: URL.createObjectURL(await res.blob()), pageCount: Number.isFinite(count) && count > 0 ? count : null };
+  },
 
   // Assignments
   listAssignments: (examId: string) => http<ApiSuccess<MarkingAssignment[]>>(`${A}/${examId}/assignments`),

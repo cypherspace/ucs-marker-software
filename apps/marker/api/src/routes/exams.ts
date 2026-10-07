@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
@@ -125,11 +125,31 @@ router.get('/:id/questions', requireAuth, async (req, res, next) => {
   }
 });
 
+// Only the exam's lead teacher (or an admin) may change its questions.
+async function requireExamEditor(req: Request, res: Response, examId: string): Promise<boolean> {
+  const exam = await db('exams').where({ id: examId }).first<{ lead_teacher_id: string }>('lead_teacher_id');
+  if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return false; }
+  if (req.user!.role !== 'admin' && exam.lead_teacher_id !== req.user!.sub) {
+    res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' }); return false;
+  }
+  return true;
+}
+
+async function questionNumberTaken(examId: string, questionNumber: string, exceptId?: string): Promise<boolean> {
+  const row = await db('exam_questions')
+    .where({ exam_id: examId })
+    .whereRaw('LOWER(question_number) = LOWER(?)', [questionNumber.trim()])
+    .modify((qb) => { if (exceptId) qb.whereNot({ id: exceptId }); })
+    .first('id');
+  return Boolean(row);
+}
+
 // Create/upsert question regions
 router.post('/:id/questions', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
   try {
+    if (!(await requireExamEditor(req, res, req.params.id))) return;
     const QuestionSchema = z.object({
-      question_number: z.string().min(1).max(20),
+      question_number: z.string().trim().min(1).max(20),
       max_marks: z.number().int().min(0).max(100),
       clip_coordinates: z.array(z.object({
         page: z.number().int().min(1),
@@ -145,6 +165,9 @@ router.post('/:id/questions', requireAuth, requireRole(['teacher', 'admin']), as
       })).optional(),
     });
     const body = QuestionSchema.parse(req.body);
+    if (await questionNumberTaken(req.params.id, body.question_number)) {
+      res.status(409).json({ error: `Question ${body.question_number} already exists in this exam`, code: 'DUPLICATE_QUESTION' }); return;
+    }
     const [question] = await db('exam_questions')
       .insert({
         exam_id: req.params.id,
@@ -164,8 +187,9 @@ router.post('/:id/questions', requireAuth, requireRole(['teacher', 'admin']), as
 // Update question coordinates
 router.patch('/:examId/questions/:questionId', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
   try {
+    if (!(await requireExamEditor(req, res, req.params.examId))) return;
     const UpdateSchema = z.object({
-      question_number: z.string().max(20).optional(),
+      question_number: z.string().trim().min(1).max(20).optional(),
       max_marks: z.number().int().min(0).max(100).optional(),
       clip_coordinates: z.array(z.object({
         page: z.number().int().min(1),
@@ -181,6 +205,23 @@ router.patch('/:examId/questions/:questionId', requireAuth, requireRole(['teache
       })).nullable().optional(),
     });
     const body = UpdateSchema.parse(req.body);
+    if (body.question_number !== undefined &&
+        await questionNumberTaken(req.params.examId, body.question_number, req.params.questionId)) {
+      res.status(409).json({ error: `Question ${body.question_number} already exists in this exam`, code: 'DUPLICATE_QUESTION' }); return;
+    }
+    if (body.max_marks !== undefined) {
+      const top = await db('script_marks as sm')
+        .join('script_clips as sc', 'sc.id', 'sm.clip_id')
+        .where('sc.question_id', req.params.questionId)
+        .max('sm.marks_awarded as m')
+        .first<{ m: number | null }>();
+      if (top?.m != null && body.max_marks < top.m) {
+        res.status(409).json({
+          error: `Marks of ${top.m} have already been awarded on this question, so the maximum can't be lowered below ${top.m}`,
+          code: 'MARKS_EXCEED_MAX',
+        }); return;
+      }
+    }
     const patch: Record<string, unknown> = {};
     if (body.question_number !== undefined) patch.question_number = body.question_number;
     if (body.max_marks !== undefined) patch.max_marks = body.max_marks;
@@ -193,6 +234,50 @@ router.patch('/:examId/questions/:questionId', requireAuth, requireRole(['teache
       .returning('*');
     if (!updated) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
     res.json({ data: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Delete a question. Clips, marks, assignments and comparison pairs cascade, so:
+//  - human marks exist      -> refused (409 HAS_MARKS)
+//  - clips or AI marks only -> needs ?confirm=1 (409 CONFIRM_REQUIRED with counts)
+//  - nothing generated yet  -> deleted straight away
+router.delete('/:examId/questions/:questionId', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    if (!(await requireExamEditor(req, res, req.params.examId))) return;
+    const question = await db('exam_questions')
+      .where({ id: req.params.questionId, exam_id: req.params.examId })
+      .first<{ id: string; question_number: string }>('id', 'question_number');
+    if (!question) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
+
+    const count = async (q: Promise<{ n: string } | undefined>) => Number((await q)?.n ?? 0);
+    const counts = {
+      clips: await count(db('script_clips').where({ question_id: question.id }).count('id as n').first<{ n: string }>()),
+      human_marks: await count(db('script_marks as sm').join('script_clips as sc', 'sc.id', 'sm.clip_id')
+        .where({ 'sc.question_id': question.id, 'sm.mark_source': 'human' }).count('sm.id as n').first<{ n: string }>()),
+      ai_marks: await count(db('script_marks as sm').join('script_clips as sc', 'sc.id', 'sm.clip_id')
+        .where({ 'sc.question_id': question.id, 'sm.mark_source': 'ai' }).count('sm.id as n').first<{ n: string }>()),
+      assignments: await count(db('marking_assignments').where({ question_id: question.id }).count('* as n').first<{ n: string }>()),
+    };
+
+    if (counts.human_marks > 0) {
+      res.status(409).json({
+        error: `Question ${question.question_number} already has ${counts.human_marks} mark${counts.human_marks === 1 ? '' : 's'} from teachers, so it can't be deleted`,
+        code: 'HAS_MARKS',
+        counts,
+      }); return;
+    }
+    if ((counts.clips > 0 || counts.ai_marks > 0) && req.query.confirm !== '1') {
+      res.status(409).json({
+        error: `Deleting question ${question.question_number} will also delete ${counts.clips} generated clip${counts.clips === 1 ? '' : 's'}`,
+        code: 'CONFIRM_REQUIRED',
+        counts,
+      }); return;
+    }
+
+    await db('exam_questions').where({ id: question.id }).delete();
+    res.json({ data: { ok: true, deleted: counts } });
   } catch (err) {
     next(err);
   }

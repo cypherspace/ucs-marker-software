@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api';
+import { api, HttpError } from '../api';
 import type { ExamQuestion } from '@marker/shared-types';
 import {
   CoordinatePicker,
@@ -9,11 +9,15 @@ import {
   toNameZones,
   fromQuestionRegions,
   type DrawnRegion,
+  type RegionType,
 } from '../components/CoordinatePicker';
 import { DrivePicker, driveConfigured } from '../components/DrivePicker';
 
 type SetupTab = 'scripts' | 'questions' | 'assign';
-type RegionType = 'question' | 'ms' | 'name_zone';
+
+// Compare region sets ignoring their generated ids.
+const strip = (rs: DrawnRegion[]) =>
+  rs.map(({ type, page, x, y, width, height }) => [type, page, Math.round(x), Math.round(y), Math.round(width), Math.round(height)]);
 
 export function ExamSetup() {
   const { id } = useParams<{ id: string }>();
@@ -25,12 +29,14 @@ export function ExamSetup() {
   const questionsQ = useQuery({ queryKey: ['questions', id], queryFn: () => api.listQuestions(id!) });
   const assignmentsQ = useQuery({ queryKey: ['assignments', id], queryFn: () => api.listAssignments(id!) });
   const usersQ = useQuery({ queryKey: ['admin-users'], queryFn: () => api.admin.listUsers() });
+  const progressQ = useQuery({ queryKey: ['progress', id], queryFn: () => api.getProgress(id!) });
 
   const exam = examQ.data?.data;
   const scripts = scriptsQ.data?.data ?? [];
   const questions = questionsQ.data?.data ?? [];
   const assignments = assignmentsQ.data?.data ?? [];
   const teachers = usersQ.data?.data?.users ?? [];
+  const progressByQuestion = new Map((progressQ.data?.data.questions ?? []).map((p) => [p.question_id, p]));
 
   // ── Script upload ─────────────────────────────────────────────────────────
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
@@ -73,19 +79,85 @@ export function ExamSetup() {
     },
   });
 
+  // ── Question edit / delete ────────────────────────────────────────────────
+  const [editingQId, setEditingQId] = useState<string | null>(null);
+  const [editNumber, setEditNumber] = useState('');
+  const [editMarks, setEditMarks] = useState('');
+  const [questionError, setQuestionError] = useState<string | null>(null);
+
+  function refreshQuestions() {
+    qc.invalidateQueries({ queryKey: ['questions', id] });
+    qc.invalidateQueries({ queryKey: ['progress', id] });
+  }
+
+  function startEditing(q: ExamQuestion) {
+    setQuestionError(null);
+    setEditingQId(q.id);
+    setEditNumber(q.question_number);
+    setEditMarks(String(q.max_marks));
+  }
+
+  const updateQuestionMutation = useMutation({
+    mutationFn: (q: ExamQuestion) => api.updateQuestion(id!, q.id, {
+      question_number: editNumber.trim(),
+      max_marks: Number(editMarks),
+    }),
+    onSuccess: () => {
+      setEditingQId(null);
+      setQuestionError(null);
+      refreshQuestions();
+    },
+    onError: (e) => setQuestionError((e as Error).message),
+  });
+
+  async function deleteQuestion(q: ExamQuestion) {
+    setQuestionError(null);
+    if (!window.confirm(`Delete question ${q.question_number}?`)) return;
+    try {
+      await api.deleteQuestion(id!, q.id);
+    } catch (e) {
+      if (e instanceof HttpError && e.code === 'CONFIRM_REQUIRED') {
+        if (!window.confirm(`${e.message}. This cannot be undone. Delete it anyway?`)) return;
+        try {
+          await api.deleteQuestion(id!, q.id, true);
+        } catch (e2) {
+          setQuestionError((e2 as Error).message);
+          return;
+        }
+      } else {
+        setQuestionError((e as Error).message);
+        return;
+      }
+    }
+    refreshQuestions();
+    qc.invalidateQueries({ queryKey: ['assignments', id] });
+  }
+
   // ── Region drawing (CoordinatePicker) ─────────────────────────────────────
   const [editingQuestion, setEditingQuestion] = useState<ExamQuestion | null>(null);
+  const [initialRegions, setInitialRegions] = useState<DrawnRegion[]>([]);
   const [editorRegions, setEditorRegions] = useState<DrawnRegion[]>([]);
   const [editorPage, setEditorPage] = useState(1);
+  const [pageCount, setPageCount] = useState<number | null>(null);
   const [editorType, setEditorType] = useState<RegionType>('question');
   const [templateScriptId, setTemplateScriptId] = useState<string>('');
+  const [reclip, setReclip] = useState<{ question: ExamQuestion; clips: number; marked: number } | null>(null);
 
   function openRegionEditor(q: ExamQuestion) {
+    const regions = fromQuestionRegions(q);
     setEditingQuestion(q);
-    setEditorRegions(fromQuestionRegions(q));
+    setInitialRegions(regions);
+    setEditorRegions(regions);
     setEditorPage(1);
+    setPageCount(null);
     setEditorType('question');
     setTemplateScriptId(scripts[0]?.id ?? '');
+  }
+
+  function closeRegionEditor() {
+    const dirty = JSON.stringify(strip(editorRegions)) !== JSON.stringify(strip(initialRegions));
+    if (dirty && !window.confirm('Discard the changes you made to these regions?')) return;
+    setEditingQuestion(null);
   }
 
   const saveRegionsMutation = useMutation({
@@ -94,9 +166,26 @@ export function ExamSetup() {
       ms_clip_coordinates: toClipRegions(editorRegions, 'ms'),
       name_zones: toNameZones(editorRegions),
     }),
-    onSuccess: () => {
+    onSuccess: async () => {
+      const q = editingQuestion!;
       setEditingQuestion(null);
-      qc.invalidateQueries({ queryKey: ['questions', id] });
+      refreshQuestions();
+      // If crops were already generated for this question they are now out of date.
+      try {
+        const progress = await api.getProgress(id!);
+        const p = progress.data.questions.find((x) => x.question_id === q.id);
+        if (p && p.total_clips > 0) setReclip({ question: q, clips: p.total_clips, marked: p.marked_clips });
+        else setReclip(null);
+      } catch { /* the banner is a convenience only */ }
+    },
+  });
+
+  const reclipMutation = useMutation({
+    mutationFn: (q: ExamQuestion) => api.triggerClipping(id!, [q.id]),
+    onSuccess: () => {
+      setReclip(null);
+      qc.invalidateQueries({ queryKey: ['exam', id] });
+      refreshQuestions();
     },
   });
 
@@ -247,38 +336,124 @@ export function ExamSetup() {
                 Add
               </button>
             </div>
+            {addQuestionMutation.error && (
+              <p role="alert" className="text-sm text-red-700">{(addQuestionMutation.error as Error).message}</p>
+            )}
           </div>
+
+          {reclip && (
+            <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <span className="min-w-0 flex-1">
+                Regions for Q{reclip.question.question_number} changed, so its {reclip.clips} generated clip{reclip.clips === 1 ? '' : 's'} use the old crop.
+                {reclip.marked > 0 && ` ${reclip.marked} of them ${reclip.marked === 1 ? 'has' : 'have'} already been marked on the old crop.`}
+              </span>
+              <button
+                onClick={() => reclipMutation.mutate(reclip.question)}
+                disabled={reclipMutation.isPending}
+                className="rounded-lg bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {reclipMutation.isPending ? 'Re-clipping…' : `Re-clip Q${reclip.question.question_number}`}
+              </button>
+              <button onClick={() => setReclip(null)} className="rounded-lg px-3 py-1.5 text-amber-800 hover:bg-amber-100">Not now</button>
+              {reclipMutation.error && <span className="w-full text-red-700">{(reclipMutation.error as Error).message}</span>}
+            </div>
+          )}
+
+          {questionError && (
+            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{questionError}</div>
+          )}
 
           {questions.length > 0 && (
             <div className="rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
-              {questions.map((q: ExamQuestion) => (
-                <div key={q.id} className="flex items-center gap-3 px-4 py-3">
-                  <span className="w-12 font-medium text-slate-700">Q{q.question_number}</span>
-                  <span className="text-sm text-slate-500">{q.max_marks} marks</span>
-                  <div className="ml-auto flex items-center gap-2 text-xs">
-                    {(() => {
-                      const coords: { page: number }[] = q.clip_coordinates ?? [];
-                      if (coords.length === 0) {
-                        return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">No regions yet</span>;
-                      }
-                      const pages = [...new Set(coords.map((r) => r.page))].sort((a, b) => a - b);
-                      return (
-                        <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">
-                          {coords.length} region{coords.length !== 1 ? 's' : ''} · p.{pages.join(', ')}
-                        </span>
-                      );
-                    })()}
-                    <button
-                      onClick={() => openRegionEditor(q)}
-                      disabled={scripts.length === 0}
-                      title={scripts.length === 0 ? 'Upload a script first to draw on' : 'Draw clip regions'}
-                      className="rounded bg-indigo-600 px-2 py-1 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
-                    >
-                      Draw regions
-                    </button>
+              {questions.map((q: ExamQuestion) => {
+                const isEditing = editingQId === q.id;
+                const clips = progressByQuestion.get(q.id)?.total_clips ?? 0;
+                return (
+                  <div key={q.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    {isEditing ? (
+                      <>
+                        <label className="flex items-center gap-1 text-sm text-slate-500">
+                          Q
+                          <input
+                            type="text"
+                            value={editNumber}
+                            onChange={(e) => setEditNumber(e.target.value)}
+                            aria-label="Question number"
+                            className="w-20 rounded border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+                          />
+                        </label>
+                        <label className="flex items-center gap-1 text-sm text-slate-500">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={editMarks}
+                            onChange={(e) => setEditMarks(e.target.value)}
+                            aria-label="Maximum marks"
+                            className="w-20 rounded border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+                          />
+                          marks
+                        </label>
+                        <div className="ml-auto flex items-center gap-2 text-xs">
+                          <button
+                            onClick={() => updateQuestionMutation.mutate(q)}
+                            disabled={!editNumber.trim() || editMarks === '' || updateQuestionMutation.isPending}
+                            className="rounded bg-indigo-600 px-3 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => { setEditingQId(null); setQuestionError(null); }}
+                            className="rounded border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <span className="w-12 font-medium text-slate-700">Q{q.question_number}</span>
+                        <span className="text-sm text-slate-500">{q.max_marks} marks</span>
+                        {clips > 0 && <span className="text-xs text-slate-400">{clips} clip{clips === 1 ? '' : 's'}</span>}
+                        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
+                          {(() => {
+                            const coords: { page: number }[] = q.clip_coordinates ?? [];
+                            if (coords.length === 0) {
+                              return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">No regions yet</span>;
+                            }
+                            const pages = [...new Set(coords.map((r) => r.page))].sort((a, b) => a - b);
+                            return (
+                              <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">
+                                {coords.length} region{coords.length !== 1 ? 's' : ''} · p.{pages.join(', ')}
+                              </span>
+                            );
+                          })()}
+                          <button
+                            onClick={() => openRegionEditor(q)}
+                            disabled={scripts.length === 0}
+                            title={scripts.length === 0 ? 'Upload a script first to draw on' : 'Draw or edit clip regions'}
+                            className="rounded bg-indigo-600 px-2.5 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                          >
+                            {(q.clip_coordinates ?? []).length > 0 ? 'Edit regions' : 'Draw regions'}
+                          </button>
+                          <button
+                            onClick={() => startEditing(q)}
+                            className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => deleteQuestion(q)}
+                            className="rounded border border-red-200 bg-white px-2.5 py-1.5 font-medium text-red-600 hover:bg-red-50"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -341,11 +516,19 @@ export function ExamSetup() {
 
       {/* Region drawing modal */}
       {editingQuestion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setEditingQuestion(null)}>
-          <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={closeRegionEditor}
+        >
+          <div
+            role="dialog"
+            aria-label={`Draw regions for question ${editingQuestion.question_number}`}
+            className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal header / toolbar */}
             <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 px-4 py-2.5">
-              <span className="font-medium text-slate-700">Draw regions — Q{editingQuestion.question_number}</span>
+              <span className="font-medium text-slate-700">Regions: Q{editingQuestion.question_number}</span>
 
               <div className="ml-2 flex items-center gap-1 rounded-lg border border-slate-200 p-0.5 text-xs">
                 {([['question', 'Question'], ['ms', 'Mark scheme'], ['name_zone', 'Name zone']] as [RegionType, string][]).map(([t, label]) => (
@@ -361,17 +544,32 @@ export function ExamSetup() {
 
               {(() => {
                 const pagesWithRegions = new Set(editorRegions.map((r) => r.page));
+                const lastPage = pageCount ?? Infinity;
                 return (
                   <div className="flex items-center gap-1 text-xs text-slate-600">
                     <span>Page</span>
-                    <button onClick={() => setEditorPage((p) => Math.max(1, p - 1))} className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200">−</button>
-                    <span className="relative w-6 text-center font-medium">
-                      {editorPage}
+                    <button
+                      onClick={() => setEditorPage((p) => Math.max(1, p - 1))}
+                      disabled={editorPage <= 1}
+                      aria-label="Previous page"
+                      className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200 disabled:opacity-40"
+                    >
+                      −
+                    </button>
+                    <span className="relative min-w-[3.5rem] text-center font-medium">
+                      {editorPage}{pageCount ? ` of ${pageCount}` : ''}
                       {pagesWithRegions.has(editorPage) && (
-                        <span className="absolute -top-0.5 -right-1 w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                        <span className="absolute -right-1 -top-0.5 h-1.5 w-1.5 rounded-full bg-indigo-500" />
                       )}
                     </span>
-                    <button onClick={() => setEditorPage((p) => p + 1)} className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200">+</button>
+                    <button
+                      onClick={() => setEditorPage((p) => Math.min(lastPage, p + 1))}
+                      disabled={editorPage >= lastPage}
+                      aria-label="Next page"
+                      className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200 disabled:opacity-40"
+                    >
+                      +
+                    </button>
                   </div>
                 );
               })()}
@@ -379,43 +577,50 @@ export function ExamSetup() {
               {scripts.length > 1 && (
                 <select
                   value={templateScriptId}
-                  onChange={(e) => setTemplateScriptId(e.target.value)}
+                  onChange={(e) => { setTemplateScriptId(e.target.value); setPageCount(null); setEditorPage(1); }}
                   className="rounded border border-slate-300 px-2 py-1 text-xs"
                   title="Script used as the layout template"
+                  aria-label="Template script"
                 >
                   {scripts.map((s) => <option key={s.id} value={s.id}>Script {s.student_number}</option>)}
                 </select>
               )}
+              {scripts.length === 1 && (
+                <span className="text-xs text-slate-500">Script {scripts[0].student_number}</span>
+              )}
 
-              <button onClick={() => setEditingQuestion(null)} className="ml-auto text-slate-400 hover:text-slate-600">✕</button>
+              <button onClick={closeRegionEditor} aria-label="Close" className="ml-auto text-slate-400 hover:text-slate-600">✕</button>
             </div>
 
             {/* Canvas */}
             <div className="min-h-0 flex-1 overflow-auto p-4">
               {templateScriptId ? (
                 <CoordinatePicker
-                  pageImageUrl={api.renderScriptPageUrl(templateScriptId, editorPage)}
+                  key={`${editingQuestion.id}-${templateScriptId}`}
+                  scriptId={templateScriptId}
                   page={editorPage}
-                  existingRegions={editorRegions}
+                  initialRegions={editorRegions}
                   onRegionsChange={setEditorRegions}
                   activeType={editorType}
+                  onPageCount={(n) => { setPageCount(n); setEditorPage((p) => Math.min(p, n)); }}
+                  onRequestPage={setEditorPage}
                 />
               ) : (
-                <div className="text-sm text-slate-500">No script available to draw on.</div>
+                <div className="text-sm text-slate-500">No script available to draw on. Upload a script first.</div>
               )}
             </div>
 
             {/* Footer */}
             <div className="flex items-center gap-3 border-t border-slate-200 px-4 py-2.5">
               <span className="text-xs text-slate-500">
-                Drag to draw a {editorType === 'name_zone' ? 'name zone (blacked out)' : editorType === 'ms' ? 'mark-scheme region' : 'question region'}.
-                Navigate pages to add regions across multiple pages — all are stitched into one image at clip time.
+                Drag on the page to draw a {editorType === 'name_zone' ? 'name zone (blacked out)' : editorType === 'ms' ? 'mark-scheme region' : 'question region'}.
+                Move between pages to add regions on several pages; they are stitched into one image at clip time.
               </span>
               {saveRegionsMutation.error && (
-                <span className="text-xs text-red-600">{(saveRegionsMutation.error as Error).message}</span>
+                <span role="alert" className="text-xs text-red-600">{(saveRegionsMutation.error as Error).message}</span>
               )}
               <div className="ml-auto flex gap-2">
-                <button onClick={() => setEditingQuestion(null)} className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100">Cancel</button>
+                <button onClick={closeRegionEditor} className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100">Cancel</button>
                 <button
                   onClick={() => saveRegionsMutation.mutate()}
                   disabled={saveRegionsMutation.isPending}

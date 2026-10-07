@@ -275,11 +275,15 @@ def render(req: RenderRequest):
         raise HTTPException(status_code=422, detail=f"Cannot access PDF: {exc}")
 
     try:
-        png_bytes = render_page(pdf_path, req.page_number, req.max_width)
+        png_bytes, page_count = render_page(pdf_path, req.page_number, req.max_width)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error("render_page failed uri=%s page=%d: %s", req.pdf_uri, req.page_number, exc)
         raise HTTPException(status_code=500, detail=f"Render failed: {exc}")
 
-    return Response(content=png_bytes, media_type="image/png")
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"X-Page-Count": str(page_count)},
+    )
