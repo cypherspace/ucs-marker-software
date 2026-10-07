@@ -80,9 +80,50 @@ Secrets created from PowerShell got a UTF-8 BOM, which broke the `TOKEN_ENCRYPTI
 - The OAuth client must list both Cloud Run URLs as redirect URIs (`<url>/auth/google/callback`) and as JavaScript origins (Drive picker).
 - Access control is the app's own `users` and `allowed_emails` tables. `ALLOW_SIGNUP` is false in production, so unknown Google accounts are rejected.
 
+## Status and next steps (as of 2026-10-07)
+
+**State.** Production runs the code from PR #2 (migrations 001 to 004). Everything below is on `dev` and in **PR #3 (`dev` into `main`)**, built and tested locally only (real Postgres, browser tests, unit tests; AI calls and Google were stubbed, so nothing has been tried against real Gemini, real Drive or the live extractor):
+
+- Clipper: page images load with a visible error and Retry; page count bound; clearer errors when the extractor is unreachable; regions can be selected, moved, resized, deleted, undone, cleared; Re-clip after edits (`POST /exams/:id/clip` takes `question_ids`).
+- Questions: rename, change marks, delete (blocked once teachers have marked; confirmation if clips exist); duplicate numbers refused.
+- Homepage of status cards (`GET /api/v1/home`), shared button components (`components/ui.tsx`), clearer Exams page.
+- Admin page (`/admin`: Staff, Marking overview, Activity), deactivation (migration 005), last-admin and self-demotion guards, audit log, `GET /api/v1/teachers` for non-admin lead teachers.
+- AI marking page, typed-text (OCR) and AI-suggestion panels on the marking screen, comparative marking with pair generation, teacher-chosen judging quotas, AI judging of the rest, Bradley-Terry ranking (migration 006). Export is one row per clip (teacher's mark, else AI's) with `ai_marks_awarded`, and `rank`/`score` for comparative questions.
+- Drive picker: folders, Shared with me, shared drives; one request per PDF with per-file progress and retry.
+
+**Behaviour changes to know about.** Teachers must be assigned to a question (or lead the exam, or be admin) to mark it, see its clips or judge it. Only the lead teacher or an admin can run AI marking, set up comparisons or see rankings. AI marking needs a mark-scheme region on the question or typed guidance. `/admin` is now a frontend route.
+
+**Next steps, in order:**
+
+1. **Apply migrations 005 and 006 to production before merging.** The new code reads `users.disabled_at`, so deploying first breaks sign-in for everyone. Both migrations only add columns and tables, so the live app keeps working after they are applied. The agent environment has no Google Cloud access, so this is done from a machine with `gcloud` (PowerShell, from the repo root on an up-to-date `dev`):
+   - Backup: `gcloud sql backups create --instance=marker-postgres --project=ucs-marking-software`
+   - Temporary password: `gcloud sql users set-password postgres --instance=marker-postgres --project=ucs-marking-software --password=<TEMP>`
+   - Tunnel to `ucs-marking-software:europe-west2:marker-postgres` (the connector forwarder described above, or the Cloud SQL Auth Proxy on a local port such as 5436).
+   - `$env:DATABASE_URL="postgresql://postgres:<TEMP>@localhost:5436/marker_db"; npm run migrate:up` (expect `005_user_deactivation` and `006_ai_and_comparative`).
+   - Re-run the four `GRANT` / `ALTER DEFAULT PRIVILEGES` statements above, check `select name from pgmigrations order by id;` ends at 006, then set the `postgres` password to a new random value.
+2. **Merge PR #3.** Every push to `main` runs Cloud Build, which deploys both services. Watch the build (`gcloud builds list --project=ucs-marking-software`). To go back: `gcloud run services update-traffic marker-api --to-revisions=<previous>=100` (the migrations need no rollback).
+3. **Check the live site.** `/health`; sign in; then:
+   - Open the region editor on a real script. The live blank clipper was never diagnosed; the editor now shows the actual error. If it still fails, note the message and the status of `/api/v1/scripts/<id>/render?page=1` in the browser Network tab, and read `gcloud run services logs read marker-api --region europe-west2 --project ucs-marking-software --limit 50` (and the same for `marker-extractor`). Suspects: the ID-token call to the private extractor (audience or invoker), the extractor reading the script from GCS, a Drive-stored script whose lead teacher has no valid Drive token.
+   - Check clip images appear while marking. Signed GCS URLs (`services/storage.ts`) need `signBlob` rights; `marker-sa` has no token-creator role listed, so this may fail.
+   - Drive picker with a real account: open a nested folder, find an old PDF, pick several, upload, confirm scripts are numbered in name order and land in the exam's Drive folder; also Shared with me and a shared drive. The tab names depend on a Google picker option (`setLabel`) that was only tested against a stub.
+   - AI marking and AI judging on a handful of clips with the real Gemini key: read the reasoning, confirm teachers' marks still win, and confirm nothing identifying is in the output.
+   - Export CSV: new columns present, one row per clip.
+4. Then pick from the open items below.
+
 ## Known limits / open items
 
-- Cloud Run caps request bodies at 32 MB. Script PDF uploads above that fail with 413 (not fixed).
+- Cloud Run caps request bodies at 32 MB, so each uploaded PDF must be under about 31.9 MB (the upload screen says so). A server-side Drive import would remove this limit; it needs the uploader's stored Drive token and confirmation that Google's per-file grant also applies to the server's token.
 - CORS is `origin: true` with credentials (not tightened; low risk with `SameSite=Lax` and same-origin hosting).
-- Live end-to-end testing of script upload, clip generation (private extractor with ID-token auth) and Drive storage had not been done when this was written.
-- Branching: `main` is what is deployed (merged via PR #2 on 2026-10-06; every push to `main` triggers a Cloud Build deploy). Develop on `dev`, then PR into `main` to release.
+- Live end-to-end testing of script upload, clip generation (private extractor with ID-token auth) and Drive storage has still not been done.
+- Deleting a question leaves its clip image files in storage.
+- Comparative ranking is not yet converted into marks (no grade boundaries); no bulk OCR; no examiner-report upload for the AI.
+- Not built: Drive connection status per teacher, "sign out everywhere" and pruning expired sessions (`pruneExpiredSessions` exists but is never called), reassigning an exam's lead teacher, bulk invite, AI usage and cost tracking.
+- `requireAuth` is async without error handling, so a database failure while loading a session is an unhandled rejection.
+- `GET /exams/:id`, `/progress` and `/questions` only require sign-in, not access to the exam.
+- Separate repo, `caie-exam-builder`: `POST /papers/upload` has no admin check, so any signed-in teacher can ingest papers and trigger paid Gemini calls.
+- Migrations and the Cloud Build pipeline: migrations are still manual. Running them in the pipeline would need the app's database account to own or alter tables.
+- Branching: `main` is what is deployed (every push triggers a Cloud Build deploy). Develop on `dev`, then PR into `main` to release.
+
+## Working in a fresh checkout
+
+`git checkout dev && git pull`, `npm install` (if packages look incomplete, delete `node_modules` and run `npm ci`), `docker compose up -d postgres`, `npm run migrate:up`, then the three dev servers as described above. Use `AUTH_DISABLED=true` for a quick look and `AI_STUB=1` to try AI features without a Gemini key. To see the Drive picker locally, set `VITE_GOOGLE_CLIENT_ID`, `VITE_GOOGLE_API_KEY` and `VITE_GOOGLE_PROJECT_NUMBER` in the root `.env`. Checks: `npm run build`, `npm test`, and `npx tsc --noEmit` in `apps/marker/api`.
