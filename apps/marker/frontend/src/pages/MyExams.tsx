@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { buttonClass } from '../components/ui';
 import type { ExamQuestion } from '@marker/shared-types';
 
 export function MyExams() {
@@ -29,17 +30,20 @@ export function MyExams() {
                 {[exam.subject, exam.year_group, exam.exam_board].filter(Boolean).join(' · ')}
               </p>
               <div className="flex flex-wrap gap-2">
-                {exam.assigned_questions.map((q: ExamQuestion) => (
-                  <Link
-                    key={q.id}
-                    to={`/mark/${exam.id}/${q.id}`}
-                    className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 hover:bg-indigo-100"
-                  >
-                    <span>Q{q.question_number}</span>
-                    <span className="text-indigo-400">·</span>
-                    <span>{q.max_marks}m</span>
-                  </Link>
-                ))}
+                {exam.assigned_questions.map((q: ExamQuestion) => {
+                  const comparative = q.marking_mode === 'comparative';
+                  return (
+                    <Link
+                      key={q.id}
+                      to={comparative ? `/compare/${exam.id}/${q.id}` : `/mark/${exam.id}/${q.id}`}
+                      className={buttonClass('secondary')}
+                    >
+                      <span>{comparative ? 'Compare' : 'Mark'} Q{q.question_number}</span>
+                      <span className="text-slate-400">·</span>
+                      <span>{comparative ? 'ranking' : `${q.max_marks} marks`}</span>
+                    </Link>
+                  );
+                })}
               </div>
             </div>
           ))}

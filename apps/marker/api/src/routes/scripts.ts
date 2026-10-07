@@ -4,9 +4,10 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { storage, isGcsUri } from '../services/storage.js';
 import { isDriveUri, fileIdFromUri, getDownloadUrl, uploadFile, createExamFolder } from '../services/drive.js';
-import { extractorFetch } from '../services/extractor.js';
+import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
+import { requireClipAccess } from '../services/access.js';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 
 const router = Router();
@@ -99,8 +100,11 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
   try {
     const exam = await db('exams').where({ id: req.params.id }).first();
     if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return; }
+    const { question_ids } = z.object({ question_ids: z.array(z.string().uuid()).optional() }).parse(req.body ?? {});
     const scripts = await db('student_scripts').where({ exam_id: req.params.id });
-    const questions = await db('exam_questions').where({ exam_id: req.params.id });
+    const questionsQuery = db('exam_questions').where({ exam_id: req.params.id });
+    if (question_ids) questionsQuery.whereIn('id', question_ids);
+    const questions = await questionsQuery;
 
     if (!scripts.length) { res.status(422).json({ error: 'No scripts uploaded', code: 'NO_SCRIPTS' }); return; }
     if (!questions.length) { res.status(422).json({ error: 'No questions defined', code: 'NO_QUESTIONS' }); return; }
@@ -122,11 +126,21 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
       name_zones: q.name_zones ?? [],
     }));
 
-    const resp = await extractorFetch('/clip-scripts', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ scripts: scriptPayload, questions: questionPayload }),
-    });
+    let resp: Response;
+    try {
+      resp = await extractorFetch('/clip-scripts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scripts: scriptPayload, questions: questionPayload }),
+      });
+    } catch (err) {
+      console.error('Extractor unreachable:', err);
+      res.status(502).json({
+        error: `Could not reach the clipping service: ${describeExtractorFailure(err)}`,
+        code: 'EXTRACTOR_UNREACHABLE',
+      });
+      return;
+    }
     if (!resp.ok) {
       const body = await resp.text();
       console.error('Extractor error:', body);
@@ -226,15 +240,37 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
       pdfUri = storage.rawUri(script.original_pdf_url);
     }
 
-    const resp = await extractorFetch('/render', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ pdf_uri: pdfUri, page_number: page, max_width: 2000 }),
-    });
-    if (!resp.ok) {
-      console.error('Extractor render error:', await resp.text());
-      res.status(502).json({ error: 'Render failed', code: 'EXTRACTOR_ERROR' }); return;
+    let resp: Response;
+    try {
+      resp = await extractorFetch('/render', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pdf_uri: pdfUri, page_number: page, max_width: 2000 }),
+      });
+    } catch (err) {
+      console.error('Extractor unreachable:', err);
+      res.status(502).json({
+        error: `Could not reach the page renderer: ${describeExtractorFailure(err)}`,
+        code: 'EXTRACTOR_UNREACHABLE',
+      });
+      return;
     }
+    if (!resp.ok) {
+      const body = await resp.text();
+      console.error(`Extractor render error (${resp.status}):`, body);
+      let detail = '';
+      try { detail = String((JSON.parse(body) as { detail?: unknown }).detail ?? ''); } catch { /* not JSON */ }
+      if (resp.status === 400) {
+        res.status(400).json({ error: detail || 'Invalid page', code: 'BAD_REQUEST' }); return;
+      }
+      res.status(502).json({
+        error: `Page render failed (extractor returned ${resp.status}${detail ? `: ${detail}` : ''})`,
+        code: 'EXTRACTOR_ERROR',
+      });
+      return;
+    }
+    const pageCount = resp.headers.get('x-page-count');
+    if (pageCount) res.setHeader('X-Page-Count', pageCount);
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'private, max-age=300');
     res.send(Buffer.from(await resp.arrayBuffer()));
@@ -246,6 +282,7 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
 // Get a signed/local URL for a script's full PDF
 router.get('/clips/:id/script', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireClipAccess(req, res, req.params.id))) return;
     const clip = await db('script_clips as sc')
       .join('student_scripts as ss', 'ss.id', 'sc.script_id')
       .join('exams as e', 'e.id', 'ss.exam_id')

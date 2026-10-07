@@ -104,14 +104,20 @@ def clip_question(
     return buf.getvalue()
 
 
-def render_page(pdf_path: Path, page_number: int, max_width: int = 1200) -> bytes:
-    """Render a single PDF page to PNG for the CoordinatePicker admin UI."""
+def render_page(pdf_path: Path, page_number: int, max_width: int = 1200) -> tuple[bytes, int]:
+    """Render a single PDF page to PNG for the CoordinatePicker admin UI.
+
+    Returns (png_bytes, total_page_count) so the UI can bound page navigation.
+    """
     doc = fitz.open(str(pdf_path))
-    if page_number < 1 or page_number > len(doc):
-        raise ValueError(f"Page {page_number} out of range (doc has {len(doc)} pages)")
-    page = doc[page_number - 1]
-    scale = min(1.0, max_width / page.rect.width) * (_SCALE / 1.0)
-    mat = fitz.Matrix(scale, scale)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-    doc.close()
-    return pix.tobytes("png")
+    try:
+        total = len(doc)
+        if page_number < 1 or page_number > total:
+            raise ValueError(f"Page {page_number} out of range (document has {total} pages)")
+        page = doc[page_number - 1]
+        scale = min(1.0, max_width / page.rect.width) * (_SCALE / 1.0)
+        mat = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        return pix.tobytes("png"), total
+    finally:
+        doc.close()

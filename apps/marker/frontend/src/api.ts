@@ -1,15 +1,20 @@
 import type {
   ApiSuccess, AuthMe, Exam, ExamQuestion, StudentScript, ScriptClip,
-  ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair,
+  ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
+  AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
+  QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
+  ComparativeStatus, ComparativeNextPair, Ranking,
 } from '@marker/shared-types';
 
 export class HttpError extends Error {
   status: number;
   code?: string;
-  constructor(status: number, message: string, code?: string) {
+  body?: Record<string, unknown>;
+  constructor(status: number, message: string, code?: string, body?: Record<string, unknown>) {
     super(message);
     this.status = status;
     this.code = code;
+    this.body = body;
   }
 }
 
@@ -21,6 +26,7 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
       res.status,
       (body as { error?: string }).error ?? `HTTP ${res.status}`,
       (body as { code?: string }).code,
+      body as Record<string, unknown>,
     );
     if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
     throw err;
@@ -34,6 +40,8 @@ const ADM = '/admin/v1';
 export const api = {
   me: () => http<ApiSuccess<AuthMe>>('/auth/me'),
   logout: () => http<ApiSuccess<{ ok: true }>>('/auth/logout', { method: 'POST' }),
+
+  home: () => http<ApiSuccess<HomeSummary>>(`${A}/home`),
 
   // Exams
   listExams: () => http<ApiSuccess<Exam[]>>(`${A}/`),
@@ -59,6 +67,8 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     }),
+  deleteQuestion: (examId: string, questionId: string, confirm = false) =>
+    http<ApiSuccess<{ ok: true }>>(`${A}/${examId}/questions/${questionId}${confirm ? '?confirm=1' : ''}`, { method: 'DELETE' }),
   updateQuestion: (examId: string, questionId: string, body: Partial<ExamQuestion>) =>
     http<ApiSuccess<ExamQuestion>>(`${A}/${examId}/questions/${questionId}`, {
       method: 'PATCH',
@@ -76,8 +86,12 @@ export const api = {
       body: form,
     });
   },
-  triggerClipping: (examId: string) =>
-    http<ApiSuccess<{ clips_created: number; ms_clips_created: number }>>(`${A}/exams/${examId}/clip`, { method: 'POST' }),
+  triggerClipping: (examId: string, questionIds?: string[]) =>
+    http<ApiSuccess<{ clips_created: number; ms_clips_created: number }>>(`${A}/exams/${examId}/clip`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(questionIds ? { question_ids: questionIds } : {}),
+    }),
   uploadMarkScheme: (examId: string, file: File) => {
     const form = new FormData();
     form.append('mark_scheme', file);
@@ -88,6 +102,22 @@ export const api = {
   },
   // URL for an <img> — renders a script PDF page to PNG via the extractor
   renderScriptPageUrl: (scriptId: string, page: number) => `${A}/scripts/${scriptId}/render?page=${page}`,
+  // Fetch a rendered page as an object URL so failures surface as real errors (status + message)
+  fetchScriptPage: async (scriptId: string, page: number): Promise<{ objectUrl: string; pageCount: number | null }> => {
+    const res = await fetch(`${A}/scripts/${scriptId}/render?page=${page}`, { credentials: 'include' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
+      throw new HttpError(
+        res.status,
+        (body as { error?: string }).error ?? `HTTP ${res.status}`,
+        (body as { code?: string }).code,
+        body as Record<string, unknown>,
+      );
+    }
+    const count = Number(res.headers.get('x-page-count'));
+    return { objectUrl: URL.createObjectURL(await res.blob()), pageCount: Number.isFinite(count) && count > 0 ? count : null };
+  },
 
   // Assignments
   listAssignments: (examId: string) => http<ApiSuccess<MarkingAssignment[]>>(`${A}/${examId}/assignments`),
@@ -110,9 +140,7 @@ export const api = {
   // Marking
   myExams: () => http<ApiSuccess<(Exam & { assigned_questions: ExamQuestion[] })[]>>(`${A}/my-exams`),
   getNextClip: (examId: string, questionId: string) =>
-    http<ApiSuccess<{ id: string; clip_url: string; ms_url: string | null; question: ExamQuestion; remaining: number } | null>>(
-      `${A}/exams/${examId}/queue/${questionId}`,
-    ),
+    http<ApiSuccess<QueueClip | null>>(`${A}/exams/${examId}/queue/${questionId}`),
   saveMark: (body: { clip_id: string; marks_awarded: number; annotation_data: AnnotationData }) =>
     http<ApiSuccess<ScriptMark>>(`${A}/marks`, {
       method: 'POST',
@@ -124,48 +152,84 @@ export const api = {
   clipImageUrl: (clipId: string) => `${A}/clips/${clipId}/image`,
 
   // Comparative marking
-  getNextPair: (examId: string, questionId: string) =>
-    http<ApiSuccess<ComparativePair | null>>(`${A}/exams/${examId}/compare/${questionId}`),
-  recordComparison: (pairId: string, winnerClipId: string) =>
-    http<ApiSuccess<ComparativePair>>(`${A}/compare/${pairId}`, {
+  compareStatus: (examId: string, questionId: string) =>
+    http<ApiSuccess<ComparativeStatus>>(`${A}/exams/${examId}/compare/${questionId}/status`),
+  compareCreatePairs: (examId: string, questionId: string, perItem: number, preview: boolean) =>
+    http<ApiSuccess<{ round: number; count: number; created: number }>>(`${A}/exams/${examId}/compare/${questionId}/pairs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ per_item: perItem, preview }),
+    }),
+  compareNext: (examId: string, questionId: string) =>
+    http<ApiSuccess<ComparativeNextPair | null>>(`${A}/exams/${examId}/compare/${questionId}/next`),
+  compareJudge: (pairId: string, winnerClipId: string) =>
+    http<ApiSuccess<{ ok: true }>>(`${A}/compare/pairs/${pairId}/judge`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ winner_clip_id: winnerClipId }),
     }),
+  compareRanking: (examId: string, questionId: string) =>
+    http<ApiSuccess<Ranking>>(`${A}/exams/${examId}/compare/${questionId}/ranking`),
+  compareAiPlan: (examId: string, questionId: string) =>
+    http<ApiSuccess<{ pair_ids: string[]; total: number; has_mark_scheme: boolean }>>(
+      `${A}/exams/${examId}/compare/${questionId}/ai-judge/plan`, { method: 'POST' }),
+  compareAiStep: (examId: string, questionId: string, pairIds: string[], guidance: string, useExamples: boolean) =>
+    http<ApiSuccess<{ results: { pair_id: string; ok: boolean; error?: string }[] }>>(
+      `${A}/exams/${examId}/compare/${questionId}/ai-judge/step`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pair_ids: pairIds, guidance: guidance || undefined, use_examples: useExamples }),
+      }),
 
   // Export
   exportResults: (examId: string, includeNames?: boolean) =>
     http<ApiSuccess<{ driveUrl?: string; csv?: string }>>(`${A}/exams/${examId}/export${includeNames ? '?names=1' : ''}`),
 
   // AI
-  runOcr: (clipId: string) => http<ApiSuccess<{ ocr_text: string }>>(`${A}/clips/${clipId}/ocr`, { method: 'POST' }),
-  aiMark: (clipId: string, body: { mark_scheme_text: string; examiner_report_text?: string; generate_feedback?: boolean }) =>
-    http<ApiSuccess<{ mark: ScriptMark; reasoning: string }>>(`${A}/clips/${clipId}/ai-mark`, {
+  aiStatus: () => http<ApiSuccess<{ configured: boolean; model: string }>>(`${A}/ai/status`),
+  runOcr: (clipId: string, refresh = false) =>
+    http<ApiSuccess<{ ocr_text: string; cached: boolean }>>(`${A}/clips/${clipId}/ocr${refresh ? '?refresh=1' : ''}`, { method: 'POST' }),
+  aiPlan: (examId: string, settings: AiSettings, scope: { type: AiScopeType; count?: number }) =>
+    http<ApiSuccess<AiPlan>>(`${A}/exams/${examId}/ai-mark/plan`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ question_id: settings.question_id, mode: settings.mode, scope }),
     }),
-  triggerAiMarking: (examId: string, body: { question_id: string; mark_scheme_text: string; generate_feedback?: boolean }) =>
-    http<ApiSuccess<{ queued: number }>>(`${A}/exams/${examId}/ai-mark`, {
+  aiStep: (examId: string, settings: AiSettings, clipIds: string[]) =>
+    http<ApiSuccess<{ results: AiStepResult[] }>>(`${A}/exams/${examId}/ai-mark/step`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...settings, guidance: settings.guidance || undefined, clip_ids: clipIds }),
     }),
+  aiResults: (examId: string, questionId: string) =>
+    http<ApiSuccess<AiResults>>(`${A}/exams/${examId}/ai-results?question_id=${questionId}`),
 
   // Admin
+  listTeachers: () => http<ApiSuccess<TeacherOption[]>>(`${A}/teachers`),
   admin: {
-    listUsers: () => http<ApiSuccess<{ users: AuthMe[]; invites: { email: string; role: string }[] }>>(`${ADM}/users`),
+    listUsers: () => http<ApiSuccess<{ users: AdminUser[]; invites: AdminInvite[] }>>(`${ADM}/users`),
     addInvite: (email: string, role: 'admin' | 'teacher') =>
       http<ApiSuccess<{ ok: true }>>(`${ADM}/invites`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ email, role }),
       }),
+    removeInvite: (email: string) =>
+      http<ApiSuccess<{ ok: true }>>(`${ADM}/invites/${encodeURIComponent(email)}`, { method: 'DELETE' }),
     setUserRole: (id: string, role: 'admin' | 'teacher') =>
-      http<ApiSuccess<AuthMe>>(`${ADM}/users/${id}`, {
+      http<ApiSuccess<{ id: string; email: string; role: 'admin' | 'teacher' }>>(`${ADM}/users/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ role }),
       }),
+    deactivateUser: (id: string) =>
+      http<ApiSuccess<{ id: string; disabled: true; leads_exams: number }>>(`${ADM}/users/${id}/deactivate`, { method: 'POST' }),
+    reactivateUser: (id: string) =>
+      http<ApiSuccess<{ id: string; disabled: false }>>(`${ADM}/users/${id}/reactivate`, { method: 'POST' }),
+    auditLog: (before?: string) =>
+      http<ApiSuccess<{ entries: AuditEntry[]; next_before: string | null }>>(
+        `${ADM}/audit?limit=50${before ? `&before=${encodeURIComponent(before)}` : ''}`,
+      ),
+    overview: () => http<ApiSuccess<OverviewExam[]>>(`${ADM}/overview`),
   },
 };

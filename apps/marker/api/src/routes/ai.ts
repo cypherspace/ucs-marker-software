@@ -1,170 +1,210 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
-import { storage } from '../services/storage.js';
-import { extractorFetch } from '../services/extractor.js';
 import { config } from '../config.js';
-import { requireAuth, requireRole } from '../middleware/requireAuth.js';
-import { GoogleGenAI } from '@google/genai';
+import { storage } from '../services/storage.js';
+import { fileIdFromUri, getDownloadUrl, isDriveUri } from '../services/drive.js';
+import { describeExtractorFailure, extractorFetch } from '../services/extractor.js';
+import { requireAuth } from '../middleware/requireAuth.js';
+import { requireClipAccess, requireQuestionAccess, type ClipContext } from '../services/access.js';
+import { aiMarkClip, modelName } from '../services/ai.js';
+import type { AiPlan, AiResultRow, AiResults, AiStepResult } from '@marker/shared-types';
 
 const router = Router();
 
-function gemini() {
-  if (!config.googleApiKey) throw new Error('GOOGLE_API_KEY not configured');
-  return new GoogleGenAI({ apiKey: config.googleApiKey });
-}
+const aiConfigured = () => config.aiStub || Boolean(config.googleApiKey);
 
-// Trigger OCR on a clip
+router.get('/ai/status', requireAuth, (_req, res) => {
+  res.json({ data: { configured: aiConfigured(), model: modelName() } });
+});
+
+// ── OCR ─────────────────────────────────────────────────────────────────────
+// Transcribe a clip's handwriting. The result is cached on the clip.
 router.post('/clips/:id/ocr', requireAuth, async (req, res, next) => {
   try {
-    const clip = await db('script_clips').where({ id: req.params.id }).first<{ clip_image_url: string }>();
-    if (!clip) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
-
-    // Call the Python extractor OCR endpoint
-    const resp = await extractorFetch('/ocr', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ image_url: storage.rawUri(clip.clip_image_url) }),
-    });
-    if (!resp.ok) {
-      res.status(502).json({ error: 'OCR failed', code: 'OCR_ERROR' }); return;
+    const clip = await requireClipAccess(req, res, req.params.id);
+    if (!clip) return;
+    if (clip.ocr_text !== null && req.query.refresh !== '1') {
+      res.json({ data: { ocr_text: clip.ocr_text, cached: true } }); return;
     }
-    const result = (await resp.json()) as { text: string };
-    await db('script_clips').where({ id: req.params.id }).update({ ocr_text: result.text });
-    res.json({ data: { ocr_text: result.text } });
+    if (!aiConfigured()) {
+      res.status(503).json({ error: 'Text recognition is not set up (no Gemini key configured).', code: 'AI_NOT_CONFIGURED' }); return;
+    }
+
+    let text: string;
+    if (config.aiStub) {
+      text = 'Stub transcription (AI_STUB)';
+    } else {
+      // The extractor reads local/GCS paths and https URLs; Drive clips need a temporary download URL.
+      const imageUrl = isDriveUri(clip.clip_image_url)
+        ? await getDownloadUrl(clip.lead_teacher_id, fileIdFromUri(clip.clip_image_url))
+        : storage.rawUri(clip.clip_image_url);
+      let resp: Response;
+      try {
+        resp = await extractorFetch('/ocr', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ image_url: imageUrl }),
+        });
+      } catch (err) {
+        res.status(502).json({ error: `Could not reach the text recognition service: ${describeExtractorFailure(err)}`, code: 'EXTRACTOR_UNREACHABLE' }); return;
+      }
+      if (!resp.ok) {
+        console.error(`OCR failed (${resp.status}):`, await resp.text());
+        res.status(502).json({ error: `Text recognition failed (service returned ${resp.status})`, code: 'OCR_ERROR' }); return;
+      }
+      text = ((await resp.json()) as { text: string }).text;
+    }
+    await db('script_clips').where({ id: clip.clip_id }).update({ ocr_text: text });
+    res.json({ data: { ocr_text: text, cached: false } });
   } catch (err) {
     next(err);
   }
 });
 
-// AI mark a clip
-router.post('/clips/:id/ai-mark', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+// ── AI marking ──────────────────────────────────────────────────────────────
+// The browser drives AI runs in small steps: `plan` picks the clips (so the
+// teacher sees the count before anything is sent to Gemini), then `step`
+// marks up to 3 clips per request. This works on Cloud Run, where background
+// work after a response is throttled, and gives visible progress.
+
+const ModeSchema = z.enum(['marks', 'feedback', 'both']);
+const ScopeSchema = z.object({
+  type: z.enum(['unmarked', 'sample', 'human_marked', 'all']),
+  count: z.number().int().min(1).max(500).optional(),
+});
+
+router.post('/exams/:id/ai-mark/plan', requireAuth, async (req, res, next) => {
   try {
-    const body = z.object({
-      mark_scheme_text: z.string().min(1),
-      examiner_report_text: z.string().optional(),
-      generate_feedback: z.boolean().default(false),
-    }).parse(req.body);
+    const body = z.object({ question_id: z.string().uuid(), scope: ScopeSchema, mode: ModeSchema }).parse(req.body);
+    const question = await requireQuestionAccess(req, res, body.question_id, { leadOnly: true, examId: req.params.id });
+    if (!question) return;
+    if (!aiConfigured()) {
+      res.status(503).json({ error: 'AI marking is not set up (no Gemini key configured).', code: 'AI_NOT_CONFIGURED' }); return;
+    }
 
-    const clip = await db('script_clips as sc')
-      .join('exam_questions as eq', 'eq.id', 'sc.question_id')
-      .where('sc.id', req.params.id)
-      .first<{ clip_image_url: string; max_marks: number; question_number: string; ocr_text: string | null }>();
-    if (!clip) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
+    const needsMarks = body.mode !== 'feedback';
+    const needsFeedback = body.mode !== 'marks';
+    const q = db('script_clips as sc')
+      .leftJoin('script_marks as ai', function () { this.on('ai.clip_id', 'sc.id').andOnVal('ai.mark_source', 'ai'); })
+      .where('sc.question_id', body.question_id)
+      .select('sc.id');
 
-    // Read image bytes
-    const imageBytes = await storage.read(clip.clip_image_url);
-    const imageBase64 = imageBytes.toString('base64');
-
-    const ai = gemini();
-    const prompt = buildMarkingPrompt(clip.max_marks, body.mark_scheme_text, body.examiner_report_text, body.generate_feedback);
-
-    const response = await ai.models.generateContent({
-      model: config.geminiModel,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            { inlineData: { mimeType: 'image/png', data: imageBase64 } },
-            { text: prompt },
-          ],
-        },
-      ],
+    const missing = () => q.where((w) => {
+      w.whereNull('ai.id');
+      if (needsMarks) w.orWhereNull('ai.marks_awarded');
+      if (needsFeedback) w.orWhereNull('ai.ai_feedback');
     });
-
-    const text = response.text ?? '';
-    const parsed = parseMarkingResponse(text, clip.max_marks);
-
-    // Save AI mark
-    const [mark] = await db('script_marks')
-      .insert({
-        clip_id: req.params.id,
-        marker_id: null,
-        mark_source: 'ai',
-        marks_awarded: parsed.marks,
-        ai_feedback: parsed.feedback ?? null,
-        status: 'marked',
-        marked_at: db.fn.now(),
-      })
-      .returning('*');
-
-    res.json({ data: { mark, reasoning: parsed.reasoning } });
+    switch (body.scope.type) {
+      case 'unmarked': missing().orderBy('sc.created_at'); break;
+      case 'sample': missing().orderByRaw('random()').limit(body.scope.count ?? 10); break;
+      case 'human_marked':
+        q.whereExists(function () {
+          this.select(db.raw('1')).from('script_marks as hm')
+            .whereRaw('hm.clip_id = sc.id').andWhere('hm.mark_source', 'human').andWhereNot('hm.status', 'pending');
+        }).orderBy('sc.created_at');
+        break;
+      case 'all': q.orderBy('sc.created_at'); break;
+    }
+    const rows = await q;
+    const plan: AiPlan = {
+      clip_ids: rows.map((r: { id: string }) => r.id),
+      total: rows.length,
+      has_mark_scheme: Boolean(question.ms_clip_image_url),
+    };
+    res.json({ data: plan });
   } catch (err) {
     next(err);
   }
 });
 
-// Trigger AI marking for all unmarked clips in an exam
-router.post('/exams/:id/ai-mark', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+router.post('/exams/:id/ai-mark/step', requireAuth, async (req, res, next) => {
   try {
     const body = z.object({
       question_id: z.string().uuid(),
-      mark_scheme_text: z.string().min(1),
-      examiner_report_text: z.string().optional(),
-      generate_feedback: z.boolean().default(false),
+      clip_ids: z.array(z.string().uuid()).min(1).max(3),
+      mode: ModeSchema,
+      strictness: z.enum(['strict', 'balanced', 'lenient']).default('balanced'),
+      guidance: z.string().max(4000).optional(),
+      use_examples: z.boolean().default(false),
     }).parse(req.body);
+    const question = await requireQuestionAccess(req, res, body.question_id, { leadOnly: true, examId: req.params.id });
+    if (!question) return;
+    if (!aiConfigured()) {
+      res.status(503).json({ error: 'AI marking is not set up (no Gemini key configured).', code: 'AI_NOT_CONFIGURED' }); return;
+    }
+    if (!question.ms_clip_image_url && !body.guidance?.trim()) {
+      res.status(422).json({ error: 'Give the AI a mark scheme: draw a mark-scheme region for this question, or add marking guidance.', code: 'NO_MARK_SCHEME' }); return;
+    }
 
-    const clips = await db('script_clips as sc')
-      .leftJoin('script_marks as sm', function () {
-        this.on('sm.clip_id', 'sc.id').andOnVal('sm.mark_source', 'ai');
-      })
-      .where('sc.question_id', body.question_id)
-      .whereNull('sm.id')
-      .select('sc.id');
+    const clips = await db('script_clips').whereIn('id', body.clip_ids).andWhere({ question_id: body.question_id })
+      .select<{ id: string; script_id: string; clip_image_url: string; ocr_text: string | null }[]>('id', 'script_id', 'clip_image_url', 'ocr_text');
+    const byId = new Map(clips.map((c) => [c.id, c]));
 
-    res.json({ data: { queued: clips.length, message: 'AI marking job accepted. Results will appear as clips are processed.' } });
-
-    // Process asynchronously (fire and forget for now — production would use a job queue)
-    setImmediate(async () => {
-      for (const { id } of clips) {
-        try {
-          await fetch(`${req.protocol}://${req.get('host')}/api/v1/clips/${id}/ai-mark`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', cookie: req.headers.cookie ?? '' },
-            body: JSON.stringify({ mark_scheme_text: body.mark_scheme_text, examiner_report_text: body.examiner_report_text, generate_feedback: body.generate_feedback }),
-          });
-        } catch (err) {
-          console.error(`AI mark failed for clip ${id}:`, err);
-        }
+    const results: AiStepResult[] = await Promise.all(body.clip_ids.map(async (clipId): Promise<AiStepResult> => {
+      const row = byId.get(clipId);
+      if (!row) return { clip_id: clipId, ok: false, error: 'Clip not found for this question' };
+      const ctx: ClipContext = { ...question, clip_id: row.id, script_id: row.script_id, clip_image_url: row.clip_image_url, ocr_text: row.ocr_text };
+      try {
+        const out = await aiMarkClip(ctx, {
+          mode: body.mode, strictness: body.strictness, guidance: body.guidance, useExamples: body.use_examples,
+        });
+        return { clip_id: clipId, ok: true, marks_awarded: out.marks_awarded };
+      } catch (err) {
+        console.error(`AI marking failed for clip ${clipId}:`, (err as Error).message);
+        return { clip_id: clipId, ok: false, error: (err as Error).message };
       }
-    });
+    }));
+    res.json({ data: { results } });
   } catch (err) {
     next(err);
   }
 });
 
-function buildMarkingPrompt(maxMarks: number, markScheme: string, examinersReport?: string, generateFeedback = false): string {
-  return `You are an experienced examiner marking a student's handwritten exam response.
-
-MARK SCHEME (max ${maxMarks} marks):
-${markScheme}
-${examinersReport ? `\nEXAMINER REPORT:\n${examinersReport}` : ''}
-
-The image shows a student's handwritten answer. Award marks strictly according to the mark scheme.
-
-Respond in this exact JSON format:
-{
-  "marks": <integer 0–${maxMarks}>,
-  "reasoning": "<brief explanation of which mark points were awarded>",
-  "feedback": ${generateFeedback ? '"<constructive feedback for the student>"' : 'null'}
-}
-
-Do not include the student's name or any identifying information in your response.`;
-}
-
-function parseMarkingResponse(text: string, maxMarks: number): { marks: number; reasoning: string; feedback: string | null } {
+// Human and AI marks side by side, with how closely they agree.
+router.get('/exams/:id/ai-results', requireAuth, async (req, res, next) => {
   try {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
-      const parsed = JSON.parse(match[0]);
-      return {
-        marks: Math.min(Math.max(0, Number(parsed.marks ?? 0)), maxMarks),
-        reasoning: String(parsed.reasoning ?? ''),
-        feedback: parsed.feedback ? String(parsed.feedback) : null,
-      };
-    }
-  } catch { /* fall through */ }
-  return { marks: 0, reasoning: text.slice(0, 500), feedback: null };
-}
+    const questionId = z.string().uuid().parse(req.query.question_id);
+    const question = await requireQuestionAccess(req, res, questionId, { leadOnly: true, examId: req.params.id });
+    if (!question) return;
+
+    const rows = (await db.raw(
+      `SELECT sc.id AS clip_id, ss.student_number, h.marks_awarded AS human_mark,
+              ai.marks_awarded AS ai_mark, ai.ai_reasoning, ai.ai_feedback
+         FROM script_clips sc
+         JOIN student_scripts ss ON ss.id = sc.script_id
+         LEFT JOIN (
+           SELECT DISTINCT ON (clip_id) clip_id, marks_awarded FROM script_marks
+            WHERE mark_source = 'human' AND status <> 'pending' AND marks_awarded IS NOT NULL
+            ORDER BY clip_id, marked_at DESC NULLS LAST
+         ) h ON h.clip_id = sc.id
+         LEFT JOIN script_marks ai ON ai.clip_id = sc.id AND ai.mark_source = 'ai'
+        WHERE sc.question_id = ?
+        ORDER BY ss.student_number`,
+      [questionId],
+    )).rows as Omit<AiResultRow, 'difference'>[];
+
+    const out: AiResultRow[] = rows.map((r) => ({
+      ...r,
+      difference: r.human_mark !== null && r.ai_mark !== null ? r.ai_mark - r.human_mark : null,
+    }));
+    const both = out.filter((r) => r.difference !== null);
+    const pct = (n: number) => (both.length ? Math.round((n / both.length) * 100) : null);
+    const result: AiResults = {
+      max_marks: question.max_marks,
+      rows: out,
+      stats: {
+        compared: both.length,
+        exact_pct: pct(both.filter((r) => r.difference === 0).length),
+        within_one_pct: pct(both.filter((r) => Math.abs(r.difference!) <= 1).length),
+        mean_abs_diff: both.length ? Math.round((both.reduce((a, r) => a + Math.abs(r.difference!), 0) / both.length) * 100) / 100 : null,
+        mean_signed_diff: both.length ? Math.round((both.reduce((a, r) => a + r.difference!, 0) / both.length) * 100) / 100 : null,
+      },
+    };
+    res.json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+});
 
 export default router;

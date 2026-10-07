@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { exportCsv } from '../services/drive.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
+import { finalMarks } from '../services/finalMark.js';
+import { computeRanking } from '../services/rankingData.js';
 
 const router = Router();
 
@@ -24,11 +26,14 @@ router.get('/exams/:id/export', requireAuth, requireRole(['teacher', 'admin']), 
 
     const includeNames = req.query.names === '1';
 
+    // One row per script and question. The mark that counts is the teacher's
+    // (else the AI's); the AI mark is also shown in its own column.
     const rows = await db('student_scripts as ss')
       .join('script_clips as sc', 'sc.script_id', 'ss.id')
       .join('exam_questions as eq', 'eq.id', 'sc.question_id')
-      .leftJoin('script_marks as sm', function () {
-        this.on('sm.clip_id', 'sc.id').andOnVal('sm.status', '!=', 'pending');
+      .leftJoin(finalMarks('fm'), 'fm.clip_id', 'sc.id')
+      .leftJoin('script_marks as aim', function () {
+        this.on('aim.clip_id', 'sc.id').andOnVal('aim.mark_source', 'ai');
       })
       .leftJoin('users as u', 'u.id', 'ss.student_id')
       .where('ss.exam_id', req.params.id)
@@ -36,22 +41,39 @@ router.get('/exams/:id/export', requireAuth, requireRole(['teacher', 'admin']), 
       .select(
         'ss.student_number',
         'u.name as student_name',
+        'eq.id as question_id',
         'eq.question_number',
         'eq.max_marks',
-        'sm.marks_awarded',
-        'sm.mark_source',
-        'sm.ai_feedback',
+        'eq.marking_mode',
+        'sc.id as clip_id',
+        'fm.marks_awarded',
+        'fm.mark_source',
+        'aim.marks_awarded as ai_marks_awarded',
+        'aim.ai_feedback',
       );
 
-    const header = includeNames
-      ? ['student_number', 'student_name', 'question', 'max_marks', 'marks_awarded', 'mark_source', 'ai_feedback']
-      : ['student_number', 'question', 'max_marks', 'marks_awarded', 'mark_source', 'ai_feedback'];
+    // Comparative questions are ranked rather than marked: add rank and score columns.
+    const comparativeIds = [...new Set(rows.filter((r) => r.marking_mode === 'comparative').map((r) => r.question_id as string))];
+    const ranks = new Map<string, { rank: number; score: number }>();
+    for (const qid of comparativeIds) {
+      for (const r of (await computeRanking(qid)).ranked) ranks.set(r.clip_id, { rank: r.rank, score: r.score });
+    }
+    const withRank = comparativeIds.length > 0;
+
+    const header = [
+      'student_number', ...(includeNames ? ['student_name'] : []),
+      'question', 'max_marks', 'marks_awarded', 'mark_source', 'ai_marks_awarded', 'ai_feedback',
+      ...(withRank ? ['rank', 'score'] : []),
+    ];
 
     const lines = [header.join(',')];
     for (const r of rows) {
-      const cells = includeNames
-        ? [r.student_number, r.student_name, r.question_number, r.max_marks, r.marks_awarded, r.mark_source, r.ai_feedback]
-        : [r.student_number, r.question_number, r.max_marks, r.marks_awarded, r.mark_source, r.ai_feedback];
+      const rk = ranks.get(r.clip_id);
+      const cells = [
+        r.student_number, ...(includeNames ? [r.student_name] : []),
+        r.question_number, r.max_marks, r.marks_awarded, r.mark_source, r.ai_marks_awarded, r.ai_feedback,
+        ...(withRank ? [rk?.rank, rk?.score] : []),
+      ];
       lines.push(cells.map(csvEscape).join(','));
     }
     const csv = lines.join('\n') + '\n';

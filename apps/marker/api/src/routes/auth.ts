@@ -147,9 +147,10 @@ router.get('/google/callback', async (req, res, next) => {
     const email = claims.email.toLowerCase();
     let user = await db('users')
       .where({ email })
-      .first<{ id: string; email: string; role: 'admin' | 'teacher'; google_sub: string | null }>(
-        'id', 'email', 'role', 'google_sub',
+      .first<{ id: string; email: string; role: 'admin' | 'teacher'; google_sub: string | null; disabled_at: Date | null }>(
+        'id', 'email', 'role', 'google_sub', 'disabled_at',
       );
+    if (user?.disabled_at) { bounceToLogin('deactivated', { email }); return; }
 
     if (!user) {
       const invite = await db('allowed_emails')
