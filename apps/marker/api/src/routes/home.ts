@@ -41,6 +41,7 @@ router.get('/home', requireAuth, async (req, res, next) => {
          JOIN exam_questions eq ON eq.id = ma.question_id
          LEFT JOIN script_clips sc ON sc.question_id = eq.id
          LEFT JOIN script_marks sm ON sm.clip_id = sc.id AND sm.marker_id = :uid AND sm.mark_source = 'human'
+                                  AND sm.status <> 'pending'
         WHERE ma.teacher_id = :uid
         GROUP BY ma.exam_id, e.name, e.created_at, eq.id, eq.question_number
         ORDER BY e.created_at, eq.question_number`,

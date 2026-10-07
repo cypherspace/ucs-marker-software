@@ -66,13 +66,6 @@ async function getOAuth2Client(userId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Download URL cache (avoids hitting Drive API on every image request)
-// ---------------------------------------------------------------------------
-
-const urlCache = new Map<string, { url: string; expiresAt: number }>();
-const URL_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -166,24 +159,6 @@ export async function downloadFile(userId: string, fileId: string): Promise<Buff
   );
 
   return Buffer.from(res.data as ArrayBuffer);
-}
-
-/**
- * Get a short-lived download URL for a Drive file.
- * Results cached for 5 minutes to avoid hammering the Drive API during marking.
- */
-export async function getDownloadUrl(userId: string, fileId: string): Promise<string> {
-  const cached = urlCache.get(fileId);
-  if (cached && cached.expiresAt > Date.now()) return cached.url;
-
-  const auth = await getOAuth2Client(userId);
-  // Generate a signed download URL using the access token
-  const tokenInfo = await auth.getAccessToken();
-  const accessToken = tokenInfo.token!;
-  const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&access_token=${encodeURIComponent(accessToken)}`;
-
-  urlCache.set(fileId, { url, expiresAt: Date.now() + URL_TTL_MS });
-  return url;
 }
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();

@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Arrow } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group } from 'react-konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import useImage from 'use-image';
 import type { Annotation, AnnotationData, AnnotationTool } from '@marker/shared-types';
@@ -9,9 +9,14 @@ interface Props {
   initialData?: AnnotationData;
   onChange: (data: AnnotationData) => void;
   readOnly?: boolean;
+  // The question's maximum: Mark ticks cannot add up to more than this
+  maxMarkTicks?: number;
 }
 
-const TOOL_LABELS: Record<AnnotationTool, string> = {
+type Tool = AnnotationTool | 'erase';
+
+const TOOL_LABELS: Record<Tool, string> = {
+  mark_tick: '+1 Mark tick',
   tick: '✓ Tick',
   cross: '✗ Cross',
   numbered_tick: '#✓ Numbered Tick',
@@ -20,9 +25,18 @@ const TOOL_LABELS: Record<AnnotationTool, string> = {
   underline: '― Underline',
   ruler: '╱ Ruler',
   text: 'T Text',
+  erase: '⌫ Erase',
 };
 
 const COLORS = ['#16a34a', '#dc2626', '#2563eb', '#d97706', '#7c3aed', '#000000'];
+
+// Mark ticks always look the same, so they cannot be confused with an ordinary tick
+const MARK_COLOR = '#4f46e5';
+
+// How many marks a set of annotations is worth: one per Mark tick
+export function markTickTotal(data: AnnotationData | null | undefined): number {
+  return (data?.annotations ?? []).filter((a) => a.type === 'mark_tick').length;
+}
 
 function nanoid() {
   return Math.random().toString(36).slice(2, 10);
@@ -51,40 +65,52 @@ function CrossShape({ x, y, color, size = 16 }: { x: number; y: number; color: s
   );
 }
 
+function MarkTickShape({ x, y }: { x: number; y: number }) {
+  return (
+    <>
+      <Circle x={x} y={y} radius={13} fill={MARK_COLOR} stroke="#ffffff" strokeWidth={2} />
+      <Line points={[x - 6, y, x - 2, y + 5, x + 7, y - 5]} stroke="#ffffff" strokeWidth={3} lineCap="round" lineJoin="round" />
+      <Text text="+1" x={x + 15} y={y - 9} fontSize={14} fontStyle="bold" fill={MARK_COLOR} />
+    </>
+  );
+}
+
 function renderAnnotation(ann: Annotation) {
   switch (ann.type) {
+    case 'mark_tick':
+      return <MarkTickShape x={ann.x} y={ann.y} />;
     case 'tick':
-      return <TickShape key={ann.id} x={ann.x} y={ann.y} color={ann.color} />;
+      return <TickShape x={ann.x} y={ann.y} color={ann.color} />;
     case 'cross':
-      return <CrossShape key={ann.id} x={ann.x} y={ann.y} color={ann.color} />;
+      return <CrossShape x={ann.x} y={ann.y} color={ann.color} />;
     case 'numbered_tick':
       return (
-        <Group key={ann.id}>
+        <>
           <TickShape x={ann.x} y={ann.y} color={ann.color} />
           <Text text={String(ann.number ?? '')} x={ann.x + 14} y={ann.y - 20} fontSize={12} fill={ann.color} fontStyle="bold" />
-        </Group>
+        </>
       );
     case 'numbered_cross':
       return (
-        <Group key={ann.id}>
+        <>
           <CrossShape x={ann.x} y={ann.y} color={ann.color} />
           <Text text={String(ann.number ?? '')} x={ann.x + 14} y={ann.y - 20} fontSize={12} fill={ann.color} fontStyle="bold" />
-        </Group>
+        </>
       );
     case 'circle':
       return (
-        <Circle key={ann.id} x={ann.x} y={ann.y} radius={ann.radius ?? 20}
+        <Circle x={ann.x} y={ann.y} radius={ann.radius ?? 20}
           stroke={ann.color} strokeWidth={2.5} fill="transparent" />
       );
     case 'underline':
     case 'ruler':
       return ann.points ? (
-        <Line key={ann.id} points={ann.points} stroke={ann.color} strokeWidth={ann.type === 'ruler' ? 1.5 : 3}
-          dash={ann.type === 'ruler' ? [6, 3] : undefined} lineCap="round" />
+        <Line points={ann.points} stroke={ann.color} strokeWidth={ann.type === 'ruler' ? 1.5 : 3}
+          hitStrokeWidth={14} dash={ann.type === 'ruler' ? [6, 3] : undefined} lineCap="round" />
       ) : null;
     case 'text':
       return (
-        <Text key={ann.id} text={ann.text ?? ''} x={ann.x} y={ann.y}
+        <Text text={ann.text ?? ''} x={ann.x} y={ann.y}
           fontSize={14} fill={ann.color} fontFamily="system-ui" />
       );
     default:
@@ -92,10 +118,11 @@ function renderAnnotation(ann: Annotation) {
   }
 }
 
-export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = false }: Props) {
-  const [image] = useImage(clipUrl, 'anonymous');
+export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = false, maxMarkTicks }: Props) {
+  const [retry, setRetry] = useState(0);
+  const [image, imageStatus] = useImage(retry ? `${clipUrl}${clipUrl.includes('?') ? '&' : '?'}r=${retry}` : clipUrl, 'anonymous');
   const [annotations, setAnnotations] = useState<Annotation[]>(initialData?.annotations ?? []);
-  const [tool, setTool] = useState<AnnotationTool>('tick');
+  const [tool, setTool] = useState<Tool>('mark_tick');
   const [color, setColor] = useState(COLORS[0]);
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
@@ -103,7 +130,10 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
   const [pendingText, setPendingText] = useState<{ x: number; y: number } | null>(null);
   const [textInput, setTextInput] = useState('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
-  const counterRef = useRef(1);
+  const [notice, setNotice] = useState<string | null>(null);
+  const counterRef = useRef(
+    1 + Math.max(0, ...(initialData?.annotations ?? []).map((a) => a.number ?? 0)),
+  );
   const stageRef = useRef<{ container: () => HTMLElement } | null>(null);
 
   const imgWidth = image?.width ?? 800;
@@ -111,10 +141,17 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
   const scale = Math.min(1, 900 / imgWidth);
   const displayW = imgWidth * scale;
   const displayH = imgHeight * scale;
+  const markTicks = annotations.filter((a) => a.type === 'mark_tick').length;
 
   const notify = useCallback((anns: Annotation[]) => {
     onChange({ annotations: anns });
   }, [onChange]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 3500);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   function addAnnotation(ann: Annotation) {
     const next = [...annotations, ann];
@@ -124,6 +161,12 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
 
   function removeLastAnnotation() {
     const next = annotations.slice(0, -1);
+    setAnnotations(next);
+    notify(next);
+  }
+
+  function removeById(id: string) {
+    const next = annotations.filter((a) => a.id !== id);
     setAnnotations(next);
     notify(next);
   }
@@ -151,7 +194,13 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
     if (readOnly) return;
     const pos = getPointer(e);
     if (!pos) return;
-    if (tool === 'cross' || tool === 'numbered_cross') {
+    if (tool === 'mark_tick') {
+      if (maxMarkTicks !== undefined && markTicks >= maxMarkTicks) {
+        setNotice(`This question is only worth ${maxMarkTicks} mark${maxMarkTicks === 1 ? '' : 's'}.`);
+        return;
+      }
+      addAnnotation({ id: nanoid(), type: 'mark_tick', x: pos.x, y: pos.y, color: MARK_COLOR });
+    } else if (tool === 'cross' || tool === 'numbered_cross') {
       const ann: Annotation = {
         id: nanoid(), type: tool, x: pos.x, y: pos.y, color,
         ...(tool === 'numbered_cross' ? { number: counterRef.current++ } : {}),
@@ -219,18 +268,24 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
     return () => window.removeEventListener('click', handler);
   }, []);
 
+  const tools = Object.keys(TOOL_LABELS) as Tool[];
+
   return (
     <div className="flex gap-4">
       {/* Toolbar */}
       {!readOnly && (
-        <div className="flex w-40 flex-col gap-2">
+        <div className="flex w-40 flex-shrink-0 flex-col gap-2">
           <div className="text-xs font-medium text-slate-500 uppercase tracking-wide">Tool</div>
-          {(Object.keys(TOOL_LABELS) as AnnotationTool[]).map((t) => (
+          {tools.map((t) => (
             <button
               key={t}
               onClick={() => setTool(t)}
               className={`rounded px-2 py-1.5 text-left text-xs font-medium transition-colors ${
-                tool === t ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                tool === t
+                  ? 'bg-indigo-600 text-white'
+                  : t === 'mark_tick'
+                    ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-100'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
               {TOOL_LABELS[t]}
@@ -243,6 +298,7 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
               <button
                 key={c}
                 onClick={() => setColor(c)}
+                aria-label={`Colour ${c}`}
                 style={{ background: c }}
                 className={`h-6 w-6 rounded-full border-2 transition-all ${color === c ? 'border-slate-700 scale-110' : 'border-transparent'}`}
               />
@@ -260,7 +316,8 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
           </div>
 
           <div className="text-xs text-slate-400 mt-2 leading-tight">
-            <strong>Dbl-click</strong> to place tick/cross.<br />
+            <strong>Click</strong> to place a mark tick.<br />
+            <strong>Dbl-click</strong> to place a tick/cross.<br />
             <strong>Right-click</strong> to change tool.
           </div>
         </div>
@@ -268,6 +325,20 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
 
       {/* Canvas */}
       <div className="relative" onContextMenu={handleContextMenu}>
+        {imageStatus === 'failed' && (
+          <div role="alert" className="mb-2 flex items-center gap-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            The clip image could not be loaded.
+            <button onClick={() => setRetry((n) => n + 1)} className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700">
+              Try again
+            </button>
+          </div>
+        )}
+        {imageStatus === 'loading' && <div className="mb-2 text-sm text-slate-500">Loading clip…</div>}
+        {notice && (
+          <div role="status" className="absolute left-2 top-2 z-10 rounded bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800 shadow">
+            {notice}
+          </div>
+        )}
         <Stage
           ref={stageRef as Parameters<typeof Stage>[0]['ref']}
           width={displayW}
@@ -278,11 +349,18 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onDblClick={handleDblClick}
-          style={{ cursor: readOnly ? 'default' : 'crosshair', border: '1px solid #e2e8f0', borderRadius: 4 }}
+          style={{ cursor: readOnly ? 'default' : tool === 'erase' ? 'not-allowed' : 'crosshair', border: '1px solid #e2e8f0', borderRadius: 4 }}
         >
           <Layer>
             {image && <KonvaImage image={image} x={0} y={0} width={imgWidth} height={imgHeight} />}
-            {annotations.map(renderAnnotation)}
+            {annotations.map((ann) => (
+              <Group
+                key={ann.id}
+                onMouseDown={!readOnly && tool === 'erase' ? (e) => { e.cancelBubble = true; removeById(ann.id); } : undefined}
+              >
+                {renderAnnotation(ann)}
+              </Group>
+            ))}
             {/* Live preview while drawing */}
             {isDrawing && (tool === 'underline' || tool === 'ruler') && currentPoints.length === 4 && (
               <Line points={currentPoints} stroke={color} strokeWidth={tool === 'ruler' ? 1.5 : 3}
@@ -323,7 +401,7 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-3 py-1 text-xs font-medium text-slate-400 uppercase">Switch tool</div>
-            {(Object.keys(TOOL_LABELS) as AnnotationTool[]).map((t) => (
+            {tools.map((t) => (
               <button
                 key={t}
                 onClick={() => { setTool(t); setContextMenu(null); }}

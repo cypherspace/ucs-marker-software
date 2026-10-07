@@ -1,88 +1,186 @@
-import { useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
-import { AnnotationCanvas } from '../components/AnnotationCanvas';
+import { AnnotationCanvas, markTickTotal } from '../components/AnnotationCanvas';
 import { ScriptClipEditor } from '../components/ScriptClipEditor';
-import type { AnnotationData } from '@marker/shared-types';
+import { Button } from '../components/ui';
+import type { AnnotationData, QueueClip } from '@marker/shared-types';
 
+// Loads one clip (the one in the URL, else the first this teacher hasn't finished).
+// The panel below is keyed by clip id, so ticks and typed marks can never carry over to another script.
 export function MarkingInterface() {
-  const { examId, questionId } = useParams<{ examId: string; questionId: string }>();
+  const { examId, questionId, clipId } = useParams<{ examId: string; questionId: string; clipId?: string }>();
+  const navigate = useNavigate();
+
+  const clipQ = useQuery({
+    queryKey: ['clip-queue', examId, questionId, clipId ?? 'next'],
+    queryFn: () => api.getNextClip(examId!, questionId!, clipId),
+    refetchOnWindowFocus: false,
+    gcTime: 0,
+  });
+
+  if (clipQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
+
+  if (clipQ.error) {
+    return (
+      <div className="p-6 text-center">
+        <p role="alert" className="mb-4 text-red-700">{(clipQ.error as Error).message}</p>
+        <Button onClick={() => navigate(`/mark/${examId}/${questionId}`)}>Back to the first unmarked clip</Button>
+      </div>
+    );
+  }
+
+  const clip = clipQ.data?.data;
+  if (!clip) {
+    const firstId = clipQ.data?.meta?.first_id;
+    return (
+      <div className="p-6 text-center">
+        <div className="text-2xl mb-2">All done!</div>
+        <p className="text-slate-500 mb-4">You've marked all clips for this question.</p>
+        <div className="flex justify-center gap-2">
+          {firstId && <Button onClick={() => navigate(`/mark/${examId}/${questionId}/${firstId}`)}>Review your marking</Button>}
+          <Button variant="primary" onClick={() => navigate('/my-exams')}>Back to My Marking</Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <MarkingPanel
+      key={clip.id}
+      clip={clip}
+      examId={examId!}
+      questionId={questionId!}
+      refetch={() => { void clipQ.refetch(); }}
+    />
+  );
+}
+
+const snapshot = (a: AnnotationData, typed: string | null) => JSON.stringify([a.annotations, typed]);
+
+function MarkingPanel({ clip, examId, questionId, refetch }: {
+  clip: QueueClip; examId: string; questionId: string; refetch: () => void;
+}) {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const question = clip.question;
+  const maxMarks = question.max_marks;
 
-  const [marks, setMarks] = useState('');
-  const [annotations, setAnnotations] = useState<AnnotationData>({ annotations: [] });
+  const initialAnnotations: AnnotationData = clip.my_mark?.annotation_data ?? { annotations: [] };
+  const initialTicks = markTickTotal(initialAnnotations);
+  // `typed` is null while the Marks box simply follows the Mark ticks; typing a different number overrides them.
+  const initialTyped = clip.my_mark?.marks_awarded == null
+    ? null
+    : (initialTicks > 0 && clip.my_mark.marks_awarded === initialTicks ? null : String(clip.my_mark.marks_awarded));
+
+  const [annotations, setAnnotations] = useState<AnnotationData>(initialAnnotations);
+  const [typed, setTyped] = useState<string | null>(initialTyped);
+  const [saved, setSaved] = useState(() => snapshot(initialAnnotations, initialTyped));
   const [showMs, setShowMs] = useState(false);
   const [showPages, setShowPages] = useState(false);
   const [showAi, setShowAi] = useState(false);
   const [showOcr, setShowOcr] = useState(false);
   const [ocrText, setOcrText] = useState<string | null>(null);
 
-  const clipQ = useQuery({
-    queryKey: ['clip-queue', examId, questionId],
-    queryFn: () => api.getNextClip(examId!, questionId!),
+  const ticks = markTickTotal(annotations);
+  const marks = typed ?? (ticks > 0 ? String(ticks) : '');
+  const marksNum = Number(marks);
+  const marksValid = marks !== '' && Number.isInteger(marksNum) && marksNum >= 0 && marksNum <= maxMarks;
+  const overriding = typed !== null && ticks > 0 && typed !== String(ticks);
+  const dirty = snapshot(annotations, typed) !== saved;
+
+  const listQ = useQuery({
+    queryKey: ['clip-list', examId, questionId],
+    queryFn: () => api.listClips(examId, questionId),
     refetchOnWindowFocus: false,
+    gcTime: 0,
   });
 
-  const clip = clipQ.data?.data;
-  const question = clip?.question;
-
   const saveMutation = useMutation({
-    mutationFn: () => api.saveMark({
-      clip_id: clip!.id,
-      marks_awarded: Number(marks),
+    mutationFn: (draft: boolean) => api.saveMark({
+      clip_id: clip.id,
+      marks_awarded: marksValid ? marksNum : null,
       annotation_data: annotations,
+      draft,
     }),
     onSuccess: () => {
-      setMarks('');
-      setAnnotations({ annotations: [] });
-      setShowAi(false);
-      setShowOcr(false);
-      setOcrText(null);
-      ocrMutation.reset();
-      qc.invalidateQueries({ queryKey: ['clip-queue', examId, questionId] });
-      clipQ.refetch();
+      setSaved(snapshot(annotations, typed));
+      void qc.invalidateQueries({ queryKey: ['clip-list', examId, questionId] });
     },
   });
 
   const ocrMutation = useMutation({
-    mutationFn: (refresh: boolean) => api.runOcr(clip!.id, refresh),
+    mutationFn: (refresh: boolean) => api.runOcr(clip.id, refresh),
     onSuccess: (r) => setOcrText(r.data.ocr_text),
   });
 
-  const handleAnnotationChange = useCallback((data: AnnotationData) => {
-    setAnnotations(data);
-  }, []);
+  const handleAnnotationChange = useCallback((data: AnnotationData) => setAnnotations(data), []);
 
-  if (clipQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
+  // Warn before closing the tab with unsaved ticks
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
 
-  if (!clip) {
-    return (
-      <div className="p-6 text-center">
-        <div className="text-2xl mb-2">All done!</div>
-        <p className="text-slate-500 mb-4">You've marked all clips for this question.</p>
-        <button onClick={() => navigate('/my-exams')} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">
-          Back to My Exams
-        </button>
-      </div>
-    );
+  const go = (id: string | null) => navigate(id ? `/mark/${examId}/${questionId}/${id}` : `/mark/${examId}/${questionId}`);
+
+  // Leave this clip, keeping any ticks and typed mark as a draft (a draft never counts as marked)
+  async function leaveTo(id: string | null) {
+    if (dirty) {
+      try { await saveMutation.mutateAsync(true); } catch { return; }
+    }
+    go(id);
   }
 
-  const maxMarks = question?.max_marks ?? 0;
-  const marksNum = Number(marks);
-  const marksValid = marks !== '' && !isNaN(marksNum) && marksNum >= 0 && marksNum <= maxMarks;
+  async function saveAndNext() {
+    try { await saveMutation.mutateAsync(false); } catch { return; }
+    go(clip.next_unmarked_id);
+  }
+
+  const list = listQ.data?.data ?? [];
+  const statusText = saveMutation.isPending ? 'Saving…'
+    : dirty ? 'Unsaved changes'
+    : saveMutation.isSuccess ? (saveMutation.variables ? 'Draft saved' : 'Saved')
+    : clip.state === 'marked' ? 'Saved'
+    : clip.state === 'draft' ? 'Draft saved'
+    : '';
 
   return (
     <div className="flex h-full flex-col">
       {/* Header bar */}
-      <div className="flex items-center gap-4 border-b border-slate-200 bg-white px-4 py-2">
-        <button onClick={() => navigate('/my-exams')} className="text-sm text-indigo-600 hover:underline">← Back</button>
+      <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
+        <button onClick={async () => { if (dirty) { try { await saveMutation.mutateAsync(true); } catch { return; } } navigate('/my-exams'); }}
+          className="text-sm text-indigo-600 hover:underline">← Back</button>
         <div className="font-medium text-slate-700">
-          Question {question?.question_number} — max {maxMarks} marks
+          Question {question.question_number} — max {maxMarks} marks
         </div>
+
+        <div className="flex items-center gap-1 text-sm">
+          <Button className="!px-2.5" disabled={!clip.prev_id || saveMutation.isPending} onClick={() => void leaveTo(clip.prev_id)} aria-label="Previous script">‹ Prev</Button>
+          <select
+            aria-label="Jump to a script"
+            value={clip.id}
+            onChange={(e) => void leaveTo(e.target.value)}
+            className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+          >
+            {(list.length ? list : [{ id: clip.id, state: clip.state }]).map((c, i) => (
+              <option key={c.id} value={c.id}>
+                Script {i + 1} of {clip.total}{c.state === 'marked' ? ' ✓' : c.state === 'draft' ? ' …' : ''}
+              </option>
+            ))}
+          </select>
+          <Button className="!px-2.5" disabled={!clip.next_id || saveMutation.isPending} onClick={() => void leaveTo(clip.next_id)} aria-label="Next script">Next ›</Button>
+          {clip.next_unmarked_id && (
+            <Button className="!px-2.5" disabled={saveMutation.isPending} onClick={() => void leaveTo(clip.next_unmarked_id)}>Next unmarked</Button>
+          )}
+        </div>
+
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-sm text-slate-500">{clip.remaining} remaining</span>
+          <span className="text-xs text-slate-500" aria-live="polite">{statusText}</span>
+          <span className="text-sm text-slate-500">{clip.remaining} to mark</span>
           <button
             onClick={() => {
               const next = !showOcr;
@@ -130,9 +228,11 @@ export function MarkingInterface() {
         {/* Annotation area */}
         <div className="min-w-0 flex-1 overflow-auto">
           <AnnotationCanvas
+            key={`${clip.id}-${clip.reclipped_at ?? ''}`}
             clipUrl={clip.clip_url}
             initialData={annotations}
             onChange={handleAnnotationChange}
+            maxMarkTicks={maxMarks}
           />
         </div>
 
@@ -157,7 +257,7 @@ export function MarkingInterface() {
                 {clip.ai_mark.feedback && <p className="mt-2"><span className="font-medium">Feedback:</span> {clip.ai_mark.feedback}</p>}
                 {clip.ai_mark.marks_awarded !== null && (
                   <button
-                    onClick={() => setMarks(String(clip.ai_mark!.marks_awarded))}
+                    onClick={() => setTyped(String(clip.ai_mark!.marks_awarded))}
                     className="mt-3 rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700"
                   >
                     Use this mark
@@ -191,37 +291,56 @@ export function MarkingInterface() {
       </div>
 
       {/* Mark entry footer */}
-      <div className="border-t border-slate-200 bg-white px-4 py-3 flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-4 border-t border-slate-200 bg-white px-4 py-3">
         <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-slate-700">Marks:</label>
+          <label htmlFor="marks" className="text-sm font-medium text-slate-700">Marks:</label>
           <input
+            id="marks"
             type="number"
             min={0}
             max={maxMarks}
+            step={1}
             value={marks}
-            onChange={(e) => setMarks(e.target.value)}
+            onChange={(e) => setTyped(e.target.value === String(ticks) && ticks > 0 ? null : e.target.value)}
             className="w-20 rounded border border-slate-300 px-2 py-1.5 text-center text-sm font-medium focus:border-indigo-500 focus:outline-none"
             placeholder={`0–${maxMarks}`}
           />
           <span className="text-sm text-slate-400">/ {maxMarks}</span>
         </div>
 
+        <span className="text-xs text-slate-500">
+          {ticks > 0
+            ? `${ticks} mark tick${ticks === 1 ? '' : 's'}`
+            : 'Place mark ticks on the answer, or type a mark'}
+          {overriding && (
+            <>
+              {' · '}typed mark in use{' '}
+              <button onClick={() => setTyped(null)} className="font-medium text-indigo-600 underline">use tick total ({ticks})</button>
+            </>
+          )}
+        </span>
+
+        {marks !== '' && !marksValid && (
+          <span role="alert" className="text-sm text-red-600">Enter a whole number from 0 to {maxMarks}.</span>
+        )}
         {saveMutation.error && (
-          <span className="text-sm text-red-600">{(saveMutation.error as Error).message}</span>
+          <span role="alert" className="text-sm text-red-600">{(saveMutation.error as Error).message}</span>
         )}
 
         <div className="ml-auto flex gap-2">
-          <button
-            onClick={() => saveMutation.mutate()}
-            disabled={!marksValid || saveMutation.isPending}
-            className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+          <Button
+            disabled={!marksValid || saveMutation.isPending || (!dirty && clip.state === 'marked')}
+            onClick={() => saveMutation.mutate(false, { onSuccess: refetch })}
           >
+            Save
+          </Button>
+          <Button variant="primary" disabled={!marksValid || saveMutation.isPending} onClick={() => void saveAndNext()}>
             {saveMutation.isPending ? 'Saving…' : 'Save & Next →'}
-          </button>
+          </Button>
         </div>
       </div>
 
-      {showPages && question && (
+      {showPages && (
         <ScriptClipEditor
           scriptId={clip.script_id}
           questionId={question.id}
@@ -230,11 +349,12 @@ export function MarkingInterface() {
           defaultNameZones={question.name_zones}
           onClose={() => setShowPages(false)}
           onSaved={() => {
+            // Ticks were placed on the old crop, so they no longer line up
             setShowPages(false);
             setAnnotations({ annotations: [] });
             setOcrText(null);
             ocrMutation.reset();
-            clipQ.refetch();
+            refetch();
           }}
         />
       )}

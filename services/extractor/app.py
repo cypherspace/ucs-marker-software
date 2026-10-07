@@ -91,6 +91,7 @@ class ClipMarkSchemeResponse(BaseModel):
 
 class OcrRequest(BaseModel):
     image_url: str
+    image_headers: dict[str, str] | None = None
 
 
 class OcrResponse(BaseModel):
@@ -247,7 +248,7 @@ def clip_mark_scheme(req: ClipMarkSchemeRequest):
 def ocr(req: OcrRequest):
     """Transcribe handwriting from a clip image using Gemini Vision."""
     try:
-        image_path = _localise(req.image_url)
+        image_path = _localise(req.image_url, req.image_headers)
         image_bytes = image_path.read_bytes()
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Cannot access image: {exc}")

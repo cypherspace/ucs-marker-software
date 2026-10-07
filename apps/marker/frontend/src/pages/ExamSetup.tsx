@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
@@ -14,6 +14,8 @@ import {
 import { DrivePicker, driveConfigured } from '../components/DrivePicker';
 import { UploadQueuePanel } from '../components/UploadQueuePanel';
 import { ScriptClipEditor } from '../components/ScriptClipEditor';
+import { ClipRunPanel } from '../components/ClipRunPanel';
+import { useBatchRunner } from '../hooks/useBatchRunner';
 import { useUploadQueue } from '../hooks/useUploadQueue';
 
 type SetupTab = 'scripts' | 'questions' | 'assign';
@@ -47,13 +49,43 @@ export function ExamSetup() {
     onDone: () => qc.invalidateQueries({ queryKey: ['scripts', id] }),
   });
 
-  const clipMutation = useMutation({
-    mutationFn: () => api.triggerClipping(id!),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['exam', id] });
-      qc.invalidateQueries({ queryKey: ['questions', id] });
-    },
-  });
+  // ── Clipping (a few scripts per request, so a whole class can't hit the request time limit) ──
+  const clipRunner = useBatchRunner(3);
+  const [clipJob, setClipJob] = useState<{ questionIds?: string[]; finishing: boolean; finished: boolean; error: string | null } | null>(null);
+  const clipBusy = clipRunner.state.status === 'running' || clipRunner.state.status === 'paused' || Boolean(clipJob?.finishing);
+
+  async function runClipping(questionIds?: string[]) {
+    setClipJob({ questionIds, finishing: false, finished: false, error: null });
+    try {
+      const plan = await api.planClipping(id!, questionIds);
+      clipRunner.start(plan.data.script_ids, async (scriptIds) => {
+        const r = await api.clipStep(id!, scriptIds, questionIds);
+        return r.data.results.map((x) => ({ id: x.id, ok: x.ok, error: x.error }));
+      });
+    } catch (err) {
+      setClipJob({ questionIds, finishing: false, finished: false, error: (err as Error).message });
+    }
+  }
+
+  useEffect(() => {
+    if (clipRunner.state.status !== 'done' || !clipJob || clipJob.finishing || clipJob.finished || clipJob.error) return;
+    setClipJob({ ...clipJob, finishing: true });
+    api.finishClipping(id!, clipJob.questionIds)
+      .then(() => {
+        setReclip(null);
+        qc.invalidateQueries({ queryKey: ['exam', id] });
+        qc.invalidateQueries({ queryKey: ['questions', id] });
+        qc.invalidateQueries({ queryKey: ['progress', id] });
+        setClipJob((j) => j && { ...j, finishing: false, finished: true });
+      })
+      .catch((err) => setClipJob((j) => j && { ...j, finishing: false, error: (err as Error).message }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clipRunner.state.status, clipJob]);
+
+  function dismissClipJob() {
+    clipRunner.reset();
+    setClipJob(null);
+  }
 
   // ── Mark scheme upload ────────────────────────────────────────────────────
   const msQueue = useUploadQueue((file) => api.uploadMarkScheme(id!, file), {
@@ -183,15 +215,6 @@ export function ExamSetup() {
     },
   });
 
-  const reclipMutation = useMutation({
-    mutationFn: (q: ExamQuestion) => api.triggerClipping(id!, [q.id]),
-    onSuccess: () => {
-      setReclip(null);
-      qc.invalidateQueries({ queryKey: ['exam', id] });
-      refreshQuestions();
-    },
-  });
-
   // ── Assignments ───────────────────────────────────────────────────────────
   const [assignTeacher, setAssignTeacher] = useState('');
   const [assignQuestion, setAssignQuestion] = useState('');
@@ -297,14 +320,26 @@ export function ExamSetup() {
               <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
                 <h2 className="font-medium text-slate-700">{scripts.length} Scripts Uploaded</h2>
                 <button
-                  onClick={() => clipMutation.mutate()}
-                  disabled={clipMutation.isPending || questions.length === 0}
+                  onClick={() => void runClipping()}
+                  disabled={clipBusy || questions.length === 0}
                   className="rounded-lg bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
                   title={questions.length === 0 ? 'Define questions first' : ''}
                 >
-                  {clipMutation.isPending ? 'Processing…' : 'Generate Clips'}
+                  {clipBusy ? 'Clipping…' : 'Generate Clips'}
                 </button>
               </div>
+              {clipJob && (
+                <ClipRunPanel
+                  state={clipRunner.state}
+                  finishing={clipJob.finishing}
+                  finished={clipJob.finished}
+                  error={clipJob.error}
+                  label={(sid) => `Student ${scripts.find((s) => s.id === sid)?.student_number ?? sid}`}
+                  onPause={clipRunner.pause}
+                  onResume={clipRunner.resume}
+                  onDismiss={dismissClipJob}
+                />
+              )}
               <div className="max-h-48 overflow-y-auto divide-y divide-slate-100">
                 {scripts.map((s) => (
                   <div key={s.id} className="flex items-center justify-between px-4 py-2 text-sm">
@@ -364,14 +399,29 @@ export function ExamSetup() {
                 {reclip.marked > 0 && ` ${reclip.marked} of them ${reclip.marked === 1 ? 'has' : 'have'} already been marked on the old crop.`}
               </span>
               <button
-                onClick={() => reclipMutation.mutate(reclip.question)}
-                disabled={reclipMutation.isPending}
+                onClick={() => void runClipping([reclip.question.id])}
+                disabled={clipBusy}
                 className="rounded-lg bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
               >
-                {reclipMutation.isPending ? 'Re-clipping…' : `Re-clip Q${reclip.question.question_number}`}
+                {clipBusy ? 'Re-clipping…' : `Re-clip Q${reclip.question.question_number}`}
               </button>
               <button onClick={() => setReclip(null)} className="rounded-lg px-3 py-1.5 text-amber-800 hover:bg-amber-100">Not now</button>
-              {reclipMutation.error && <span className="w-full text-red-700">{(reclipMutation.error as Error).message}</span>}
+              {clipJob?.error && <span className="w-full text-red-700">{clipJob.error}</span>}
+            </div>
+          )}
+
+          {clipJob && (
+            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <ClipRunPanel
+                state={clipRunner.state}
+                finishing={clipJob.finishing}
+                finished={clipJob.finished}
+                error={clipJob.error}
+                label={(sid) => `Student ${scripts.find((s) => s.id === sid)?.student_number ?? sid}`}
+                onPause={clipRunner.pause}
+                onResume={clipRunner.resume}
+                onDismiss={dismissClipJob}
+              />
             </div>
           )}
 

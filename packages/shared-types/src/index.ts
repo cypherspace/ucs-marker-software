@@ -2,7 +2,7 @@
 
 export interface ApiSuccess<T> {
   data: T;
-  meta?: { page?: number; limit?: number; total?: number };
+  meta?: { page?: number; limit?: number; total?: number; message?: string; first_id?: string | null };
 }
 
 export interface ApiError {
@@ -111,7 +111,9 @@ export type AnnotationTool =
   | 'circle'
   | 'underline'
   | 'ruler'
-  | 'text';
+  | 'text'
+  // A tick that is worth one mark: the Marks box is the number of these (unless overridden)
+  | 'mark_tick';
 
 export interface Annotation {
   id: string;
@@ -147,7 +149,15 @@ export interface ScriptMark {
   created_at: string;
 }
 
-// The next clip in a teacher's marking queue
+// How far a teacher has got with a clip: finished, ticks saved but not finished, or untouched
+export type ClipState = 'marked' | 'draft' | 'unmarked';
+
+export interface ClipListItem {
+  id: string;
+  state: ClipState;
+}
+
+// A clip in a teacher's marking queue
 export interface QueueClip {
   id: string;
   script_id: string;
@@ -159,7 +169,17 @@ export interface QueueClip {
   clip_url: string;
   ms_url: string | null;
   question: ExamQuestion;
+  // Clips this teacher has not finished (drafts count as not finished)
   remaining: number;
+  // Where this clip sits among the question's clips, and its neighbours
+  position: number;
+  total: number;
+  prev_id: string | null;
+  next_id: string | null;
+  next_unmarked_id: string | null;
+  state: ClipState;
+  // This teacher's own saved ticks and mark for the clip, if any
+  my_mark: { marks_awarded: number | null; annotation_data: AnnotationData | null; status: MarkStatus } | null;
   ai_mark: { marks_awarded: number | null; reasoning: string | null; feedback: string | null; model: string | null } | null;
   ocr_text: string | null;
 }
