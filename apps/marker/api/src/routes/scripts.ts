@@ -2,14 +2,13 @@ import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
 import { db } from '../db.js';
-import { storage, isGcsUri } from '../services/storage.js';
+import { storage } from '../services/storage.js';
 import { isDriveUri, fileIdFromUri, getDownloadUrl, uploadFile, createExamFolder } from '../services/drive.js';
 import { scriptPdfSource } from '../services/scriptSource.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { requireClipAccess } from '../services/access.js';
-import { createReadStream, existsSync, statSync } from 'node:fs';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -322,25 +321,6 @@ router.get('/clips/:id/script', requireAuth, async (req, res, next) => {
       url = await storage.publicUrl(clip.original_pdf_url);
     }
     res.json({ data: { url } });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Serve local file contents via /files/*?u=<uri>
-router.get('/files/*', async (req, res, next) => {
-  try {
-    const uri = String(req.query.u ?? '');
-    if (!uri) { res.status(400).json({ error: 'Missing u param', code: 'BAD_REQUEST' }); return; }
-    if (isGcsUri(uri)) {
-      const signed = await storage.publicUrl(uri);
-      res.redirect(302, signed); return;
-    }
-    if (!existsSync(uri)) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
-    const stat = statSync(uri);
-    res.setHeader('Content-Length', String(stat.size));
-    res.setHeader('Content-Type', uri.endsWith('.pdf') ? 'application/pdf' : 'image/png');
-    createReadStream(uri).pipe(res);
   } catch (err) {
     next(err);
   }
