@@ -224,9 +224,9 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
       )}
 
       {/* Main content */}
-      <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-4">
-        {/* Annotation area */}
-        <div className="min-w-0 flex-1 overflow-auto">
+      <div className="flex min-h-0 flex-1 gap-4 p-4">
+        {/* Annotation area: the tools stay in view, the script scrolls inside its own pane */}
+        <div className="min-h-0 min-w-0 flex-1">
           <AnnotationCanvas
             key={`${clip.id}-${clip.reclipped_at ?? ''}`}
             clipUrl={clip.clip_url}
@@ -238,7 +238,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
 
         {/* Side panels */}
         {((showMs && clip.ms_url) || showAi || showOcr) && (
-          <div className="w-80 flex-shrink-0 space-y-3">
+          <div className="min-h-0 w-80 flex-shrink-0 space-y-3 overflow-y-auto">
             {showMs && clip.ms_url && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-2">
                 <div className="mb-1 text-xs font-medium text-amber-700 uppercase tracking-wide">Mark Scheme</div>
