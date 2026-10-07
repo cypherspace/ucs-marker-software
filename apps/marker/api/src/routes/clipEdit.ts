@@ -118,7 +118,10 @@ router.get('/scripts/:scriptId/questions/:questionId/clip', requireAuth, async (
         'sc.clip_source', 'sc.regions', 'sc.name_zones', 'sc.reclipped_at', db.raw(CHANGED_AFTER_MARKING),
       );
     res.json({
-      data: row ?? { clip_source: 'auto', regions: null, name_zones: null, reclipped_at: null, changed_after_marking: false },
+      data: {
+        ...(row ?? { clip_source: 'auto', regions: null, name_zones: null, reclipped_at: null, changed_after_marking: false }),
+        can_edit_name_zones: ctx.isLead,
+      },
     });
   } catch (err) {
     next(err);

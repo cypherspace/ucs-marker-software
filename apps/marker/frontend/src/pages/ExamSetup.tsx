@@ -13,6 +13,7 @@ import {
 } from '../components/CoordinatePicker';
 import { DrivePicker, driveConfigured } from '../components/DrivePicker';
 import { UploadQueuePanel } from '../components/UploadQueuePanel';
+import { ScriptClipEditor } from '../components/ScriptClipEditor';
 import { useUploadQueue } from '../hooks/useUploadQueue';
 
 type SetupTab = 'scripts' | 'questions' | 'assign';
@@ -142,6 +143,7 @@ export function ExamSetup() {
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [editorType, setEditorType] = useState<RegionType>('question');
   const [templateScriptId, setTemplateScriptId] = useState<string>('');
+  const [scriptOnlyEditor, setScriptOnlyEditor] = useState(false);
   const [reclip, setReclip] = useState<{ question: ExamQuestion; clips: number; marked: number } | null>(null);
 
   function openRegionEditor(q: ExamQuestion) {
@@ -615,6 +617,16 @@ export function ExamSetup() {
                 <span className="text-xs text-slate-500">Script {scripts[0].student_number}</span>
               )}
 
+              {templateScriptId && (
+                <button
+                  onClick={() => setScriptOnlyEditor(true)}
+                  title="Choose different pages or areas for just the selected script, e.g. a typed or scribed paper, or one with pages missing"
+                  className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Clip this script differently…
+                </button>
+              )}
+
               <button onClick={closeRegionEditor} aria-label="Close" className="ml-auto text-slate-400 hover:text-slate-600">✕</button>
             </div>
 
@@ -658,6 +670,22 @@ export function ExamSetup() {
             </div>
           </div>
         </div>
+      )}
+
+      {scriptOnlyEditor && editingQuestion && templateScriptId && (
+        <ScriptClipEditor
+          scriptId={templateScriptId}
+          scriptLabel={`Script ${scripts.find((s) => s.id === templateScriptId)?.student_number ?? ''}`}
+          questionId={editingQuestion.id}
+          questionNumber={editingQuestion.question_number}
+          defaultRegions={editingQuestion.clip_coordinates}
+          defaultNameZones={editingQuestion.name_zones}
+          onClose={() => setScriptOnlyEditor(false)}
+          onSaved={() => {
+            setScriptOnlyEditor(false);
+            qc.invalidateQueries({ queryKey: ['progress', id] });
+          }}
+        />
       )}
     </div>
   );

@@ -90,6 +90,16 @@ export function ExamProgress() {
                   )}
                 </>
               )}
+              {q.manual_clips > 0 && (
+                <p className="mt-2 text-xs text-slate-500">
+                  {q.manual_clips} clip{q.manual_clips === 1 ? ' uses' : 's use'} pages chosen by hand
+                  {q.changed_after_marking_clips > 0 && (
+                    <span className="ml-1 font-medium text-amber-700">
+                      · {q.changed_after_marking_clips} changed after being marked (earlier marks may refer to the old selection)
+                    </span>
+                  )}
+                </p>
+              )}
               {q.teachers.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {q.teachers.map((t) => (

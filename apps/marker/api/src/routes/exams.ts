@@ -378,7 +378,11 @@ router.get('/:id/progress', requireAuth, async (req, res, next) => {
                    AND sm.marks_awarded IS NOT NULL)) AS ai_marked_clips,
               COUNT(sc.id) FILTER (WHERE EXISTS (
                 SELECT 1 FROM script_marks sm WHERE sm.clip_id = sc.id
-                   AND sm.status <> 'pending' AND sm.marks_awarded IS NOT NULL)) AS covered_clips
+                   AND sm.status <> 'pending' AND sm.marks_awarded IS NOT NULL)) AS covered_clips,
+              COUNT(sc.id) FILTER (WHERE sc.clip_source = 'manual') AS manual_clips,
+              COUNT(sc.id) FILTER (WHERE sc.reclipped_at IS NOT NULL AND EXISTS (
+                SELECT 1 FROM script_marks hm WHERE hm.clip_id = sc.id AND hm.mark_source = 'human'
+                   AND hm.marked_at < sc.reclipped_at)) AS changed_after_marking_clips
          FROM exam_questions eq
          LEFT JOIN script_clips sc ON sc.question_id = eq.id
         WHERE eq.exam_id = ?
@@ -388,6 +392,7 @@ router.get('/:id/progress', requireAuth, async (req, res, next) => {
     )).rows as {
       question_id: string; question_number: string; max_marks: number; marking_mode: string;
       total_clips: string; marked_clips: string; ai_marked_clips: string; covered_clips: string;
+      manual_clips: string; changed_after_marking_clips: string;
     }[];
     const teachers = (await db.raw(
       `SELECT ma.question_id, ma.teacher_id, u.email, COUNT(sm.id) AS marked
@@ -413,6 +418,8 @@ router.get('/:id/progress', requireAuth, async (req, res, next) => {
           marked_clips: Number(q.marked_clips),
           ai_marked_clips: Number(q.ai_marked_clips),
           covered_clips: Number(q.covered_clips),
+          manual_clips: Number(q.manual_clips),
+          changed_after_marking_clips: Number(q.changed_after_marking_clips),
           teachers: teachers.filter((t) => t.question_id === q.question_id).map((t) => ({
             teacher_id: t.teacher_id, email: t.email, marked: Number(t.marked), total: Number(q.total_clips),
           })),

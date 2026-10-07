@@ -90,6 +90,17 @@ export interface ScriptClip {
   created_at: string;
 }
 
+// Settings for one script's clip of one question (GET /scripts/:id/questions/:id/clip)
+export interface ClipSettings {
+  clip_source: 'auto' | 'manual';
+  regions: ClipRegion[] | null;
+  name_zones: NameZone[] | null;
+  reclipped_at: string | null;
+  changed_after_marking: boolean;
+  // Only the lead teacher or an admin can change a script's name zones
+  can_edit_name_zones: boolean;
+}
+
 // ─── Marking ─────────────────────────────────────────────────────────────────
 
 export type AnnotationTool =
@@ -139,6 +150,12 @@ export interface ScriptMark {
 // The next clip in a teacher's marking queue
 export interface QueueClip {
   id: string;
+  script_id: string;
+  // 'manual' when someone re-selected pages/areas for this script; 'auto' = the question's standard regions
+  clip_source: 'auto' | 'manual';
+  reclipped_at: string | null;
+  // Re-selected after a teacher had already marked it, so that mark may refer to the old crop
+  changed_after_marking: boolean;
   clip_url: string;
   ms_url: string | null;
   question: ExamQuestion;
@@ -174,6 +191,9 @@ export interface QuestionProgress {
   // Clips with an AI mark, and clips with any final mark (human, else AI)
   ai_marked_clips: number;
   covered_clips: number;
+  // Clips whose pages/areas were chosen by hand, and those changed after someone marked them
+  manual_clips: number;
+  changed_after_marking_clips: number;
   marking_mode: MarkingMode;
   teachers: { teacher_id: string; email: string; marked: number; total: number }[];
 }
