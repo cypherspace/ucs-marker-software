@@ -38,6 +38,7 @@ class ScriptInput(BaseModel):
     id: str
     student_number: str
     pdf_url: str
+    pdf_headers: dict[str, str] | None = None
 
 
 class QuestionInput(BaseModel):
@@ -91,6 +92,7 @@ class OcrResponse(BaseModel):
 
 class RenderRequest(BaseModel):
     pdf_uri: str
+    pdf_headers: dict[str, str] | None = None
     page_number: int
     max_width: int = 1200
 
@@ -99,9 +101,9 @@ class RenderRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _localise(uri: str) -> Path:
-    """Resolve a storage URI to a local path, downloading from GCS if needed."""
-    return storage.localise_for_read(uri)
+def _localise(uri: str, headers: dict[str, str] | None = None) -> Path:
+    """Resolve a storage URI to a local path, downloading from GCS or HTTP if needed."""
+    return storage.localise_for_read(uri, headers)
 
 
 def _gemini_model_name() -> str:
@@ -140,9 +142,9 @@ def clip_scripts(req: ClipScriptsRequest):
 
     for script in req.scripts:
         try:
-            pdf_path = _localise(script.pdf_url)
+            pdf_path = _localise(script.pdf_url, script.pdf_headers)
         except Exception as exc:
-            logger.error("Failed to localise PDF %s: %s", script.pdf_url, exc)
+            logger.error("Failed to localise PDF for script %s: %s", script.id, exc)
             raise HTTPException(status_code=422, detail=f"Cannot access PDF for script {script.id}: {exc}")
 
         for question in req.questions:
@@ -270,8 +272,9 @@ def render(req: RenderRequest):
     Returns raw PNG bytes (Content-Type: image/png).
     """
     try:
-        pdf_path = _localise(req.pdf_uri)
+        pdf_path = _localise(req.pdf_uri, req.pdf_headers)
     except Exception as exc:
+        logger.error("render: cannot access PDF: %s", exc)
         raise HTTPException(status_code=422, detail=f"Cannot access PDF: {exc}")
 
     try:

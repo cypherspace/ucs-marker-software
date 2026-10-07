@@ -68,7 +68,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "marker-sa@ucs-
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "marker-sa@ucs-marking-software.iam";
 ```
 
-Applied: 001 to 004. **005 (user deactivation) and 006 (AI marks, comparative marking) have not been applied to production yet.** Any new migration must be applied the same way, then re-run the `GRANT` statements above so `marker-sa` can use new tables and columns. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
+Applied: 001 to 006 (005 and 006 on 2026-10-07, after an on-demand backup; note 006 also deletes duplicate AI mark rows, keeping the newest per clip). Any new migration must be applied the same way, then re-run the `GRANT` statements above so `marker-sa` can use new tables and columns. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
 
 ### Secrets gotcha
 
@@ -82,7 +82,9 @@ Secrets created from PowerShell got a UTF-8 BOM, which broke the `TOKEN_ENCRYPTI
 
 ## Status and next steps (as of 2026-10-07)
 
-**State.** Production runs the code from PR #2 (migrations 001 to 004). Everything below is on `dev` and in **PR #3 (`dev` into `main`)**, built and tested locally only (real Postgres, browser tests, unit tests; AI calls and Google were stubbed, so nothing has been tried against real Gemini, real Drive or the live extractor):
+**Update 2026-10-07 (after PR #3).** Migrations 005 and 006 are applied and PR #3 is merged; Cloud Build deployed it as revision `marker-api-00007-xcj` (previous good revision: `marker-api-00005-4cs`). Verified without signing in: `/health` 200, `/admin` serves the SPA, `/auth/me`, `/api/v1/home`, `/admin/v1/*` and `/files/` return 401, the extractor returns 403 to anonymous callers, no errors in the API logs. Granted `roles/iam.serviceAccountTokenCreator` to `marker-sa` on itself, which signed GCS URLs (`services/storage.ts`) need (it was missing). **Still to check by a signed-in person** (steps 3 below): sign-in after the `disabled_at` change, the region editor on a real script, clip images while marking, the Drive picker, AI marking/judging with real Gemini, and the CSV export.
+
+**State before PR #3 merged.** Production ran the code from PR #2 (migrations 001 to 004). The list below was on `dev`, built and tested locally only (real Postgres, browser tests, unit tests; AI calls and Google were stubbed, so nothing had been tried against real Gemini, real Drive or the live extractor):
 
 - Clipper: page images load with a visible error and Retry; page count bound; clearer errors when the extractor is unreachable; regions can be selected, moved, resized, deleted, undone, cleared; Re-clip after edits (`POST /exams/:id/clip` takes `question_ids`).
 - Questions: rename, change marks, delete (blocked once teachers have marked; confirmation if clips exist); duplicate numbers refused.

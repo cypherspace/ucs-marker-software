@@ -186,6 +186,31 @@ export async function getDownloadUrl(userId: string, fileId: string): Promise<st
   return url;
 }
 
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+const TOKEN_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * A Drive media URL plus an Authorization header, for server-to-server fetches
+ * (the extractor). Keeps the access token out of the URL, and so out of logs.
+ */
+export async function getDriveMediaRequest(
+  userId: string,
+  fileId: string,
+): Promise<{ url: string; headers: Record<string, string> }> {
+  let entry = tokenCache.get(userId);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    const auth = await getOAuth2Client(userId);
+    const { token } = await auth.getAccessToken();
+    if (!token) throw new Error(`Could not obtain a Drive access token for user ${userId}`);
+    entry = { token, expiresAt: Date.now() + TOKEN_TTL_MS };
+    tokenCache.set(userId, entry);
+  }
+  return {
+    url: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+    headers: { Authorization: `Bearer ${entry.token}` },
+  };
+}
+
 /** Write a CSV string to Drive and return the web view URL. */
 export async function exportCsv(
   userId: string,
