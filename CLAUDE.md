@@ -119,7 +119,6 @@ Secrets created from PowerShell got a UTF-8 BOM, which broke the `TOKEN_ENCRYPTI
 
 ## Known limits / open items
 
-- **Gemini key invalid (found 2026-10-07).** Google answers `API_KEY_INVALID` for the key in Secret Manager `marker-gemini-api-key` (it is identical to the one in the local `.env`, so it never worked). Typed text (OCR) and AI marking/judging fail until it is replaced with a valid key. Use a key from the school's own account on a paid plan: student work is sent to Gemini, and free-tier keys may use submitted content to improve Google's products. After replacing it, start a new Cloud Run revision so running instances pick up the new version, and check `marker-extractor` logs for `/ocr`.
 
 - Cloud Run caps request bodies at 32 MB, so each uploaded PDF must be under about 31.9 MB (the upload screen says so). A server-side Drive import would remove this limit; it needs the uploader's stored Drive token and confirmation that Google's per-file grant also applies to the server's token.
 - CORS is `origin: true` with credentials (not tightened; low risk with `SameSite=Lax` and same-origin hosting).
