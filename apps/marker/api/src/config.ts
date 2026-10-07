@@ -34,7 +34,7 @@ export const config = {
   storageBackend: (process.env.STORAGE_BACKEND ?? 'local') as 'local' | 'gcs',
   storageBucket: process.env.STORAGE_BUCKET,
   googleApiKey: process.env.GOOGLE_API_KEY ?? '',
-  geminiModel: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash',
+  geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
   googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? '',
   googleOAuthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
   publicUrl: process.env.PUBLIC_URL ?? '',
