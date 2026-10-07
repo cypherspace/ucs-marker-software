@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
 import { AnnotationCanvas } from '../components/AnnotationCanvas';
+import { ScriptClipEditor } from '../components/ScriptClipEditor';
 import type { AnnotationData } from '@marker/shared-types';
 
 export function MarkingInterface() {
@@ -13,8 +14,7 @@ export function MarkingInterface() {
   const [marks, setMarks] = useState('');
   const [annotations, setAnnotations] = useState<AnnotationData>({ annotations: [] });
   const [showMs, setShowMs] = useState(false);
-  const [scriptUrl, setScriptUrl] = useState<string | null>(null);
-  const [showScript, setShowScript] = useState(false);
+  const [showPages, setShowPages] = useState(false);
   const [showAi, setShowAi] = useState(false);
   const [showOcr, setShowOcr] = useState(false);
   const [ocrText, setOcrText] = useState<string | null>(null);
@@ -54,13 +54,6 @@ export function MarkingInterface() {
   const handleAnnotationChange = useCallback((data: AnnotationData) => {
     setAnnotations(data);
   }, []);
-
-  async function handleViewScript() {
-    if (!clip) return;
-    const result = await api.getScriptUrl(clip.id);
-    setScriptUrl(result.data.url);
-    setShowScript(true);
-  }
 
   if (clipQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
@@ -117,13 +110,20 @@ export function MarkingInterface() {
             {showMs ? 'Hide MS' : 'Show MS'}
           </button>
           <button
-            onClick={handleViewScript}
-            className="rounded px-3 py-1 text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200"
+            onClick={() => setShowPages(true)}
+            title="See the other pages of this script and choose where the answer is"
+            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${clip.clip_source === 'manual' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
           >
-            View Full Script
+            {clip.clip_source === 'manual' ? 'Script pages (custom)' : 'Script pages'}
           </button>
         </div>
       </div>
+
+      {clip.changed_after_marking && (
+        <div role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          The pages for this answer were changed after it was first marked, so earlier marks may refer to the old selection.
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex min-h-0 flex-1 gap-4 overflow-auto p-4">
@@ -221,17 +221,22 @@ export function MarkingInterface() {
         </div>
       </div>
 
-      {/* Full script modal */}
-      {showScript && scriptUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowScript(false)}>
-          <div className="relative max-h-[90vh] w-[80vw] overflow-auto rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
-              <span className="font-medium text-slate-700">Full Script</span>
-              <button onClick={() => setShowScript(false)} className="text-slate-400 hover:text-slate-600">✕</button>
-            </div>
-            <iframe src={scriptUrl} className="h-[80vh] w-full" title="Full student script" />
-          </div>
-        </div>
+      {showPages && question && (
+        <ScriptClipEditor
+          scriptId={clip.script_id}
+          questionId={question.id}
+          questionNumber={question.question_number}
+          defaultRegions={question.clip_coordinates}
+          defaultNameZones={question.name_zones}
+          onClose={() => setShowPages(false)}
+          onSaved={() => {
+            setShowPages(false);
+            setAnnotations({ annotations: [] });
+            setOcrText(null);
+            ocrMutation.reset();
+            clipQ.refetch();
+          }}
+        />
       )}
     </div>
   );

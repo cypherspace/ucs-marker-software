@@ -3,7 +3,7 @@ import type {
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
-  ComparativeStatus, ComparativeNextPair, Ranking,
+  ComparativeStatus, ComparativeNextPair, Ranking, ClipSettings, ClipRegion, NameZone,
 } from '@marker/shared-types';
 
 export class HttpError extends Error {
@@ -147,7 +147,19 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     }),
-  getScriptUrl: (clipId: string) => http<ApiSuccess<{ url: string }>>(`${A}/clips/${clipId}/script`),
+  // Per-script clips: choose the pages/areas for one script's answer to one question
+  getClipSettings: (scriptId: string, questionId: string) =>
+    http<ApiSuccess<ClipSettings>>(`${A}/scripts/${scriptId}/questions/${questionId}/clip`),
+  setClipRegions: (scriptId: string, questionId: string, body: { regions: ClipRegion[]; name_zones?: NameZone[] }) =>
+    http<ApiSuccess<{ clip_id: string; clip_source: 'manual'; marked_before: boolean }>>(
+      `${A}/scripts/${scriptId}/questions/${questionId}/clip`,
+      { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
+    ),
+  resetClipRegions: (scriptId: string, questionId: string) =>
+    http<ApiSuccess<{ clip_id: string; clip_source: 'auto' }>>(
+      `${A}/scripts/${scriptId}/questions/${questionId}/clip`,
+      { method: 'DELETE' },
+    ),
   // Stable URL for clip image — redirects to Drive/GCS/local as appropriate
   clipImageUrl: (clipId: string) => `${A}/clips/${clipId}/image`,
 

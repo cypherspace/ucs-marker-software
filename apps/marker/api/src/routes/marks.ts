@@ -43,12 +43,21 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
       .orderBy('sc.created_at')
       // Select sc columns explicitly: an implicit `select *` over the join lets
       // sm.id (NULL here) shadow sc.id, returning a null clip id.
-      .first<{ id: string; clip_image_url: string; script_id: string; question_id: string; ocr_text: string | null }>(
+      .first<{
+        id: string; clip_image_url: string; script_id: string; question_id: string; ocr_text: string | null;
+        clip_source: string; reclipped_at: string | null; changed_after_marking: boolean;
+      }>(
         'sc.id as id',
         'sc.clip_image_url as clip_image_url',
         'sc.script_id as script_id',
         'sc.question_id as question_id',
         'sc.ocr_text as ocr_text',
+        'sc.clip_source as clip_source',
+        'sc.reclipped_at as reclipped_at',
+        // A clip re-selected after someone marked it: earlier marks may refer to the old crop
+        db.raw(`(sc.reclipped_at IS NOT NULL AND EXISTS (
+          SELECT 1 FROM script_marks hm
+           WHERE hm.clip_id = sc.id AND hm.mark_source = 'human' AND hm.marked_at < sc.reclipped_at)) AS changed_after_marking`),
       );
 
     if (!clip) {
@@ -64,6 +73,8 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
       clipUrl = await getDownloadUrl(access.lead_teacher_id, fileIdFromUri(clip.clip_image_url));
     } else {
       clipUrl = await storage.publicUrl(clip.clip_image_url);
+      // Local storage serves a clip from the same path every time; stamp it so a re-selected clip isn't shown from the browser's cache
+      if (clipUrl.startsWith('/files/') && clip.reclipped_at) clipUrl += `?v=${new Date(clip.reclipped_at).getTime()}`;
     }
 
     // Mark-scheme clip URL, if one was produced during clipping
@@ -92,6 +103,10 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
     res.json({
       data: {
         id: clip.id,
+        script_id: clip.script_id,
+        clip_source: clip.clip_source,
+        reclipped_at: clip.reclipped_at,
+        changed_after_marking: clip.changed_after_marking,
         clip_url: clipUrl,
         ms_url: msUrl,
         question,

@@ -3,7 +3,8 @@ import multer from 'multer';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { storage } from '../services/storage.js';
-import { isDriveUri, fileIdFromUri, getDownloadUrl, getDriveMediaRequest, uploadFile, createExamFolder } from '../services/drive.js';
+import { isDriveUri, fileIdFromUri, getDownloadUrl, uploadFile, createExamFolder } from '../services/drive.js';
+import { scriptPdfSource } from '../services/scriptSource.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
@@ -110,12 +111,18 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
 
     // Resolve URIs for the extractor; Drive URIs need a temporary download URL
     const scriptPayload = await Promise.all(scripts.map(async (s) => {
-      if (isDriveUri(s.original_pdf_url)) {
-        const { url, headers } = await getDriveMediaRequest(exam.lead_teacher_id, fileIdFromUri(s.original_pdf_url));
-        return { id: s.id, student_number: s.student_number, pdf_url: url, pdf_headers: headers };
-      }
-      return { id: s.id, student_number: s.student_number, pdf_url: storage.rawUri(s.original_pdf_url) };
+      const src = await scriptPdfSource(s.original_pdf_url, exam.lead_teacher_id);
+      return { id: s.id, student_number: s.student_number, pdf_url: src.url, pdf_headers: src.headers };
     }));
+
+    // Clips chosen by hand for one script must survive a bulk run
+    const questionIdSet = new Set(questions.map((q) => q.id));
+    const manualPairs = (await db('script_clips as sc')
+      .join('student_scripts as ss', 'ss.id', 'sc.script_id')
+      .where('ss.exam_id', req.params.id)
+      .where('sc.clip_source', 'manual')
+      .select<{ script_id: string; question_id: string }[]>('sc.script_id', 'sc.question_id'))
+      .filter((p) => questionIdSet.has(p.question_id));
 
     const questionPayload = questions.map((q) => ({
       id: q.id,
@@ -128,7 +135,7 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
       resp = await extractorFetch('/clip-scripts', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ scripts: scriptPayload, questions: questionPayload }),
+        body: JSON.stringify({ scripts: scriptPayload, questions: questionPayload, skip: manualPairs }),
       });
     } catch (err) {
       console.error('Extractor unreachable:', err);
@@ -211,7 +218,7 @@ router.post('/exams/:id/clip', requireAuth, requireRole(['teacher', 'admin']), a
     // Update exam status to marking
     await db('exams').where({ id: req.params.id }).update({ status: 'marking' });
 
-    res.json({ data: { clips_created: result.clips.length, ms_clips_created: msClipsCreated } });
+    res.json({ data: { clips_created: result.clips.length, ms_clips_created: msClipsCreated, manual_clips_kept: manualPairs.length } });
   } catch (err) {
     next(err);
   }
@@ -227,7 +234,9 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
     const script = await db('student_scripts as ss')
       .join('exams as e', 'e.id', 'ss.exam_id')
       .where('ss.id', req.params.scriptId)
-      .first<{ original_pdf_url: string; lead_teacher_id: string }>();
+      .first<{ exam_id: string; original_pdf_url: string; lead_teacher_id: string }>(
+        'ss.exam_id', 'ss.original_pdf_url', 'e.lead_teacher_id',
+      );
     if (!script) { res.status(404).json({ error: 'Script not found', code: 'NOT_FOUND' }); return; }
 
     const page = Number(req.query.page ?? 1);
@@ -235,20 +244,32 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
       res.status(400).json({ error: 'Invalid page', code: 'BAD_REQUEST' }); return;
     }
 
-    let pdfUri: string;
-    let pdfHeaders: Record<string, string> | undefined;
-    if (isDriveUri(script.original_pdf_url)) {
-      ({ url: pdfUri, headers: pdfHeaders } = await getDriveMediaRequest(script.lead_teacher_id, fileIdFromUri(script.original_pdf_url)));
-    } else {
-      pdfUri = storage.rawUri(script.original_pdf_url);
+    // Only the lead teacher and admins may see an unmasked page (needed to draw name zones).
+    // Other teachers must be assigned to a question on this exam, and see pages with every
+    // known name zone blacked out so student names stay hidden while they browse a script.
+    const user = req.user!;
+    const isLead = user.role === 'admin' || script.lead_teacher_id === user.sub;
+    if (!isLead) {
+      const assigned = await db('marking_assignments').where({ exam_id: script.exam_id, teacher_id: user.sub }).first('teacher_id');
+      if (!assigned) { res.status(403).json({ error: 'You are not assigned to this exam', code: 'FORBIDDEN' }); return; }
     }
+    let maskZones: unknown[] | undefined;
+    if (!isLead || req.query.masked === '1') {
+      const [qRows, cRows] = await Promise.all([
+        db('exam_questions').where({ exam_id: script.exam_id }).whereNotNull('name_zones').select<{ name_zones: unknown[] }[]>('name_zones'),
+        db('script_clips').where({ script_id: req.params.scriptId }).whereNotNull('name_zones').select<{ name_zones: unknown[] }[]>('name_zones'),
+      ]);
+      maskZones = [...qRows, ...cRows].flatMap((r) => r.name_zones);
+    }
+
+    const { url: pdfUri, headers: pdfHeaders } = await scriptPdfSource(script.original_pdf_url, script.lead_teacher_id);
 
     let resp: Response;
     try {
       resp = await extractorFetch('/render', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pdf_uri: pdfUri, pdf_headers: pdfHeaders, page_number: page, max_width: 2000 }),
+        body: JSON.stringify({ pdf_uri: pdfUri, pdf_headers: pdfHeaders, page_number: page, max_width: 2000, mask_zones: maskZones }),
       });
     } catch (err) {
       console.error('Extractor unreachable:', err);
@@ -282,10 +303,11 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
   }
 });
 
-// Get a signed/local URL for a script's full PDF
+// Get a signed/local URL for a script's full PDF. Unmasked, so lead teacher / admin only;
+// markers browse pages through /scripts/:scriptId/render, which hides name zones.
 router.get('/clips/:id/script', requireAuth, async (req, res, next) => {
   try {
-    if (!(await requireClipAccess(req, res, req.params.id))) return;
+    if (!(await requireClipAccess(req, res, req.params.id, { leadOnly: true }))) return;
     const clip = await db('script_clips as sc')
       .join('student_scripts as ss', 'ss.id', 'sc.script_id')
       .join('exams as e', 'e.id', 'ss.exam_id')
