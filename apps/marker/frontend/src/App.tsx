@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { api, HttpError } from './api';
 import { Login } from './pages/Login';
+import { Home } from './pages/Home';
 import { ExamList } from './pages/ExamList';
 import { CreateExam } from './pages/CreateExam';
 import { ExamSetup } from './pages/ExamSetup';
@@ -61,14 +62,15 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-4 bg-indigo-700 px-4 py-2 text-white">
-        <h1 className="text-lg font-semibold">UCS Marking</h1>
-        <nav className="flex gap-3 text-sm">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-1 bg-indigo-700 px-4 py-2 text-white">
+        <h1 className="whitespace-nowrap text-lg font-semibold"><Link to="/" className="hover:opacity-90">UCS Marking</Link></h1>
+        <nav className="flex flex-wrap gap-x-3 text-sm whitespace-nowrap">
+          <NavLink to="/" end className={navCls}>Home</NavLink>
           <NavLink to="/my-exams" className={navCls}>My Marking</NavLink>
           {isTeacherOrAdmin && <NavLink to="/exams" className={navCls}>Exams</NavLink>}
         </nav>
-        <div className="ml-auto flex items-center gap-3 text-sm">
-          <span className="opacity-90">{me.email}</span>
+        <div className="ml-auto flex items-center gap-3 whitespace-nowrap text-sm">
+          <span className="hidden opacity-90 sm:inline">{me.email}</span>
           <span className="rounded bg-indigo-600 px-2 py-0.5 text-xs">{me.role}</span>
           <button onClick={handleSignOut} className="rounded bg-indigo-800 px-2 py-1 text-xs hover:bg-indigo-900">
             Sign out
@@ -77,7 +79,7 @@ export function App() {
       </header>
       <main className="min-h-0 flex-1 overflow-auto">
         <Routes>
-          <Route path="/" element={<MyExams />} />
+          <Route path="/" element={<Home />} />
           <Route path="/my-exams" element={<MyExams />} />
           <Route path="/exams" element={<ExamList />} />
           <Route path="/exams/new" element={<CreateExam />} />

@@ -1,6 +1,6 @@
 import type {
   ApiSuccess, AuthMe, Exam, ExamQuestion, StudentScript, ScriptClip,
-  ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair,
+  ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
 } from '@marker/shared-types';
 
 export class HttpError extends Error {
@@ -37,6 +37,8 @@ const ADM = '/admin/v1';
 export const api = {
   me: () => http<ApiSuccess<AuthMe>>('/auth/me'),
   logout: () => http<ApiSuccess<{ ok: true }>>('/auth/logout', { method: 'POST' }),
+
+  home: () => http<ApiSuccess<HomeSummary>>(`${A}/home`),
 
   // Exams
   listExams: () => http<ApiSuccess<Exam[]>>(`${A}/`),

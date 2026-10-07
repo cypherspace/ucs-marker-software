@@ -38,6 +38,9 @@ export interface Exam {
   use_drive_storage: boolean;
   drive_folder_id: string | null;
   created_at: string;
+  // Present on the exam list only
+  clips_total?: number;
+  clips_marked?: number;
 }
 
 // Coordinate region in PDF user-space (points at 72 DPI)
@@ -169,4 +172,24 @@ export interface MarkingAssignment {
   question_id: string;
   question_number: string;
   assigned_at: string;
+}
+
+// ─── Home summary ────────────────────────────────────────────────────────────
+
+export interface HomeSummary {
+  marking: {
+    assigned_questions: number;
+    exams: number;
+    clips_total: number;
+    clips_left: number;
+    next: { exam_id: string; exam_name: string; question_id: string; question_number: string } | null;
+  };
+  exams: { total: number; setup: number; clipping: number; marking: number; complete: number };
+  progress: {
+    clips_total: number;
+    clips_marked: number;
+    latest_exam: { id: string; name: string } | null;
+  };
+  // Admins only
+  admin?: { staff: number; pending_invites: number };
 }

@@ -42,7 +42,27 @@ router.get('/', requireAuth, async (req, res, next) => {
         .distinct('exams.*')
         .orderBy('exams.created_at', 'desc');
     }
-    res.json({ data: rows });
+    // Per-exam clip counts for the progress bars on the exam list (one grouped query).
+    const ids = rows.map((r: { id: string }) => r.id);
+    const stats = ids.length
+      ? await db('script_clips as sc')
+          .join('exam_questions as eq', 'eq.id', 'sc.question_id')
+          .leftJoin('script_marks as sm', function () {
+            this.on('sm.clip_id', 'sc.id').andOnVal('sm.status', '<>', 'pending');
+          })
+          .whereIn('eq.exam_id', ids)
+          .groupBy('eq.exam_id')
+          .select(
+            'eq.exam_id',
+            db.raw('COUNT(DISTINCT sc.id) AS clips_total'),
+            db.raw('COUNT(DISTINCT sm.clip_id) AS clips_marked'),
+          )
+      : [];
+    const byExam = new Map(stats.map((r: { exam_id: string; clips_total: string; clips_marked: string }) =>
+      [r.exam_id, { clips_total: Number(r.clips_total), clips_marked: Number(r.clips_marked) }]));
+    res.json({
+      data: rows.map((r: { id: string }) => ({ ...r, clips_total: 0, clips_marked: 0, ...byExam.get(r.id) })),
+    });
   } catch (err) {
     next(err);
   }

@@ -1,21 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { LinkButton, ProgressBar, StatusPill } from '../components/ui';
 import type { Exam } from '@marker/shared-types';
-
-const STATUS_LABELS: Record<string, string> = {
-  setup: 'Setup',
-  clipping: 'Processing',
-  marking: 'Marking',
-  complete: 'Complete',
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  setup: 'bg-slate-100 text-slate-600',
-  clipping: 'bg-yellow-100 text-yellow-700',
-  marking: 'bg-blue-100 text-blue-700',
-  complete: 'bg-green-100 text-green-700',
-};
 
 export function ExamList() {
   const { data, isLoading, error } = useQuery({
@@ -29,44 +15,57 @@ export function ExamList() {
   const exams = data?.data ?? [];
 
   return (
-    <div className="p-6 max-w-4xl">
+    <div className="max-w-4xl p-4 sm:p-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-slate-800">Exams</h1>
-        <Link
-          to="/exams/new"
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-        >
-          New Exam
-        </Link>
+        <LinkButton to="/exams/new" variant="primary">New exam</LinkButton>
       </div>
 
       {exams.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-300 p-12 text-center">
+        <div className="rounded-xl border border-dashed border-slate-300 p-12 text-center">
           <p className="text-slate-500">No exams yet.</p>
-          <Link to="/exams/new" className="mt-3 inline-block text-sm text-indigo-600 hover:underline">
-            Create your first exam →
-          </Link>
+          <div className="mt-4 flex justify-center">
+            <LinkButton to="/exams/new" variant="primary">Create your first exam</LinkButton>
+          </div>
         </div>
       ) : (
-        <div className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
-          {exams.map((exam: Exam) => (
-            <div key={exam.id} className="flex items-center gap-4 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="font-medium text-slate-800">{exam.name}</div>
-                <div className="text-xs text-slate-500 mt-0.5">
-                  {[exam.subject, exam.year_group, exam.exam_board, exam.exam_series].filter(Boolean).join(' · ')}
+        <ul className="space-y-3">
+          {exams.map((exam: Exam) => {
+            const inSetup = exam.status === 'setup' || exam.status === 'clipping';
+            const total = exam.clips_total ?? 0;
+            const marked = exam.clips_marked ?? 0;
+            return (
+              <li
+                key={exam.id}
+                className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h2 className="font-medium text-slate-800">{exam.name}</h2>
+                    <StatusPill status={exam.status} />
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-500">
+                    {[exam.subject, exam.year_group, exam.exam_board, exam.exam_series].filter(Boolean).join(' · ')}
+                  </div>
+                  {total > 0 && (
+                    <div className="mt-3 max-w-xs">
+                      <ProgressBar value={marked} max={total} label={`${exam.name} marking progress`} />
+                      <div className="mt-1 text-xs text-slate-500">{marked} of {total} clips marked</div>
+                    </div>
+                  )}
                 </div>
-              </div>
-              <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[exam.status] ?? 'bg-slate-100 text-slate-600'}`}>
-                {STATUS_LABELS[exam.status] ?? exam.status}
-              </span>
-              <div className="flex gap-2 text-sm">
-                <Link to={`/exams/${exam.id}/setup`} className="text-indigo-600 hover:underline">Setup</Link>
-                <Link to={`/exams/${exam.id}/progress`} className="text-indigo-600 hover:underline">Progress</Link>
-              </div>
-            </div>
-          ))}
-        </div>
+                <div className="flex flex-shrink-0 flex-wrap gap-2">
+                  <LinkButton to={`/exams/${exam.id}/setup`} variant={inSetup ? 'primary' : 'secondary'}>
+                    {inSetup ? 'Continue setup' : 'Setup'}
+                  </LinkButton>
+                  <LinkButton to={`/exams/${exam.id}/progress`} variant={inSetup ? 'secondary' : 'primary'}>
+                    View progress
+                  </LinkButton>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );
