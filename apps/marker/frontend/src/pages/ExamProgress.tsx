@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
+import { Button, Card, LinkButton, ProgressBar } from '../components/ui';
 
 export function ExamProgress() {
   const { id } = useParams<{ id: string }>();
@@ -35,59 +36,74 @@ export function ExamProgress() {
   const progress = progressQ.data?.data;
 
   return (
-    <div className="p-6 max-w-4xl">
-      <div className="mb-6 flex items-center gap-4">
+    <div className="max-w-4xl p-4 sm:p-6">
+      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
         <Link to="/exams" className="text-sm text-indigo-600 hover:underline">← Exams</Link>
         <h1 className="text-2xl font-semibold text-slate-800">{exam?.name}</h1>
-        <div className="ml-auto flex items-center gap-2">
-          <button
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <LinkButton to={`/exams/${id}/ai`} variant="secondary">AI marking</LinkButton>
+          <Button
             onClick={() => { setExportMsg(null); exportMutation.mutate(false); }}
             disabled={exportMutation.isPending}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            {exportMutation.isPending ? 'Exporting…' : 'Export Results'}
-          </button>
-          <button
+            {exportMutation.isPending ? 'Exporting…' : 'Export results'}
+          </Button>
+          <Button
             onClick={() => { setExportMsg(null); exportMutation.mutate(true); }}
             disabled={exportMutation.isPending}
-            title="Adds student names via a database join — names never leave the platform otherwise"
-            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            title="Adds student names via a database join. Names never leave the platform otherwise."
           >
-            Export with Names
-          </button>
+            Export with names
+          </Button>
         </div>
       </div>
-      {exportMsg && <p className="mb-4 text-sm text-slate-600">{exportMsg}</p>}
+      {exportMsg && <p role="status" className="mb-4 text-sm text-slate-600">{exportMsg}</p>}
 
       <div className="space-y-4">
         {progress?.questions.map((q) => {
-          const pct = q.total_clips > 0 ? Math.round((q.marked_clips / q.total_clips) * 100) : 0;
+          const comparative = q.marking_mode === 'comparative';
           return (
-            <div key={q.question_id} className="rounded-lg border border-slate-200 bg-white p-4">
-              <div className="flex items-center justify-between mb-3">
+            <Card key={q.question_id} className="p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <span className="font-medium text-slate-800">Question {q.question_number}</span>
-                  <span className="ml-2 text-sm text-slate-500">({q.max_marks} marks)</span>
+                  <span className="ml-2 text-sm text-slate-500">
+                    {comparative ? 'ranked by comparison' : `(${q.max_marks} marks)`}
+                  </span>
                 </div>
-                <span className="text-sm text-slate-600">{q.marked_clips}/{q.total_clips} marked ({pct}%)</span>
+                {comparative ? (
+                  <LinkButton to={`/compare/${id}/${q.question_id}/ranking`} variant="secondary">Ranking</LinkButton>
+                ) : (
+                  <span className="text-sm text-slate-600">
+                    {q.marked_clips} of {q.total_clips} marked by teachers
+                  </span>
+                )}
               </div>
-              <div className="mb-3 h-2 rounded-full bg-slate-200">
-                <div className="h-2 rounded-full bg-indigo-500 transition-all" style={{ width: `${pct}%` }} />
-              </div>
+              {!comparative && (
+                <>
+                  <ProgressBar value={q.marked_clips} max={q.total_clips} label={`Question ${q.question_number} marking progress`} />
+                  {(q.ai_marked_clips > 0 || q.covered_clips > q.marked_clips) && (
+                    <p className="mt-2 text-xs text-slate-500">
+                      {q.ai_marked_clips} also marked by the AI · {q.covered_clips} of {q.total_clips} have a mark that counts
+                      (a teacher's mark, else the AI's)
+                    </p>
+                  )}
+                </>
+              )}
               {q.teachers.length > 0 && (
-                <div className="flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   {q.teachers.map((t) => (
                     <span key={t.teacher_id} className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs text-slate-600">
-                      {t.email}
+                      {t.email}{!comparative && ` · ${t.marked}/${t.total}`}
                     </span>
                   ))}
                 </div>
               )}
-            </div>
+            </Card>
           );
         })}
         {!progress?.questions.length && (
-          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-slate-500">
+          <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
             No questions defined yet. <Link to={`/exams/${id}/setup`} className="text-indigo-600 hover:underline">Go to setup →</Link>
           </div>
         )}

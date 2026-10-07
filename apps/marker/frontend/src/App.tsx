@@ -12,6 +12,8 @@ import { ExamProgress } from './pages/ExamProgress';
 import { MyExams } from './pages/MyExams';
 import { MarkingInterface } from './pages/MarkingInterface';
 import { ComparativeMarking } from './pages/ComparativeMarking';
+import { ComparativeRanking } from './pages/ComparativeRanking';
+import { AiMarking } from './pages/AiMarking';
 
 export function App() {
   const navigate = useNavigate();
@@ -89,6 +91,8 @@ export function App() {
           <Route path="/exams/:id/progress" element={<ExamProgress />} />
           <Route path="/mark/:examId/:questionId" element={<MarkingInterface />} />
           <Route path="/compare/:examId/:questionId" element={<ComparativeMarking />} />
+          <Route path="/compare/:examId/:questionId/ranking" element={<ComparativeRanking />} />
+          <Route path="/exams/:id/ai" element={<AiMarking />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/login" element={<Login />} />
         </Routes>

@@ -110,6 +110,13 @@ export function ExamSetup() {
     onError: (e) => setQuestionError((e as Error).message),
   });
 
+  const modeMutation = useMutation({
+    mutationFn: ({ q, comparative }: { q: ExamQuestion; comparative: boolean }) =>
+      api.updateQuestion(id!, q.id, { marking_mode: comparative ? 'comparative' : 'marks' }),
+    onSuccess: refreshQuestions,
+    onError: (e) => setQuestionError((e as Error).message),
+  });
+
   async function deleteQuestion(q: ExamQuestion) {
     setQuestionError(null);
     if (!window.confirm(`Delete question ${q.question_number}?`)) return;
@@ -415,6 +422,18 @@ export function ExamSetup() {
                         <span className="w-12 font-medium text-slate-700">Q{q.question_number}</span>
                         <span className="text-sm text-slate-500">{q.max_marks} marks</span>
                         {clips > 0 && <span className="text-xs text-slate-400">{clips} clip{clips === 1 ? '' : 's'}</span>}
+                        <label
+                          className="flex items-center gap-1.5 text-xs text-slate-600"
+                          title="Rank the scripts by comparing pairs instead of giving marks. Useful for essay questions."
+                        >
+                          <input
+                            type="checkbox"
+                            checked={q.marking_mode === 'comparative'}
+                            disabled={modeMutation.isPending}
+                            onChange={(e) => modeMutation.mutate({ q, comparative: e.target.checked })}
+                          />
+                          Rank by comparison
+                        </label>
                         <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
                           {(() => {
                             const coords: { page: number }[] = q.clip_coordinates ?? [];

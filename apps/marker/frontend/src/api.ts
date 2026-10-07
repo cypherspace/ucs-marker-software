@@ -2,6 +2,8 @@ import type {
   ApiSuccess, AuthMe, Exam, ExamQuestion, StudentScript, ScriptClip,
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
+  QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
+  ComparativeStatus, ComparativeNextPair, Ranking,
 } from '@marker/shared-types';
 
 export class HttpError extends Error {
@@ -138,9 +140,7 @@ export const api = {
   // Marking
   myExams: () => http<ApiSuccess<(Exam & { assigned_questions: ExamQuestion[] })[]>>(`${A}/my-exams`),
   getNextClip: (examId: string, questionId: string) =>
-    http<ApiSuccess<{ id: string; clip_url: string; ms_url: string | null; question: ExamQuestion; remaining: number } | null>>(
-      `${A}/exams/${examId}/queue/${questionId}`,
-    ),
+    http<ApiSuccess<QueueClip | null>>(`${A}/exams/${examId}/queue/${questionId}`),
   saveMark: (body: { clip_id: string; marks_awarded: number; annotation_data: AnnotationData }) =>
     http<ApiSuccess<ScriptMark>>(`${A}/marks`, {
       method: 'POST',
@@ -152,33 +152,57 @@ export const api = {
   clipImageUrl: (clipId: string) => `${A}/clips/${clipId}/image`,
 
   // Comparative marking
-  getNextPair: (examId: string, questionId: string) =>
-    http<ApiSuccess<ComparativePair | null>>(`${A}/exams/${examId}/compare/${questionId}`),
-  recordComparison: (pairId: string, winnerClipId: string) =>
-    http<ApiSuccess<ComparativePair>>(`${A}/compare/${pairId}`, {
+  compareStatus: (examId: string, questionId: string) =>
+    http<ApiSuccess<ComparativeStatus>>(`${A}/exams/${examId}/compare/${questionId}/status`),
+  compareCreatePairs: (examId: string, questionId: string, perItem: number, preview: boolean) =>
+    http<ApiSuccess<{ round: number; count: number; created: number }>>(`${A}/exams/${examId}/compare/${questionId}/pairs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ per_item: perItem, preview }),
+    }),
+  compareNext: (examId: string, questionId: string) =>
+    http<ApiSuccess<ComparativeNextPair | null>>(`${A}/exams/${examId}/compare/${questionId}/next`),
+  compareJudge: (pairId: string, winnerClipId: string) =>
+    http<ApiSuccess<{ ok: true }>>(`${A}/compare/pairs/${pairId}/judge`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ winner_clip_id: winnerClipId }),
     }),
+  compareRanking: (examId: string, questionId: string) =>
+    http<ApiSuccess<Ranking>>(`${A}/exams/${examId}/compare/${questionId}/ranking`),
+  compareAiPlan: (examId: string, questionId: string) =>
+    http<ApiSuccess<{ pair_ids: string[]; total: number; has_mark_scheme: boolean }>>(
+      `${A}/exams/${examId}/compare/${questionId}/ai-judge/plan`, { method: 'POST' }),
+  compareAiStep: (examId: string, questionId: string, pairIds: string[], guidance: string, useExamples: boolean) =>
+    http<ApiSuccess<{ results: { pair_id: string; ok: boolean; error?: string }[] }>>(
+      `${A}/exams/${examId}/compare/${questionId}/ai-judge/step`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pair_ids: pairIds, guidance: guidance || undefined, use_examples: useExamples }),
+      }),
 
   // Export
   exportResults: (examId: string, includeNames?: boolean) =>
     http<ApiSuccess<{ driveUrl?: string; csv?: string }>>(`${A}/exams/${examId}/export${includeNames ? '?names=1' : ''}`),
 
   // AI
-  runOcr: (clipId: string) => http<ApiSuccess<{ ocr_text: string }>>(`${A}/clips/${clipId}/ocr`, { method: 'POST' }),
-  aiMark: (clipId: string, body: { mark_scheme_text: string; examiner_report_text?: string; generate_feedback?: boolean }) =>
-    http<ApiSuccess<{ mark: ScriptMark; reasoning: string }>>(`${A}/clips/${clipId}/ai-mark`, {
+  aiStatus: () => http<ApiSuccess<{ configured: boolean; model: string }>>(`${A}/ai/status`),
+  runOcr: (clipId: string, refresh = false) =>
+    http<ApiSuccess<{ ocr_text: string; cached: boolean }>>(`${A}/clips/${clipId}/ocr${refresh ? '?refresh=1' : ''}`, { method: 'POST' }),
+  aiPlan: (examId: string, settings: AiSettings, scope: { type: AiScopeType; count?: number }) =>
+    http<ApiSuccess<AiPlan>>(`${A}/exams/${examId}/ai-mark/plan`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ question_id: settings.question_id, mode: settings.mode, scope }),
     }),
-  triggerAiMarking: (examId: string, body: { question_id: string; mark_scheme_text: string; generate_feedback?: boolean }) =>
-    http<ApiSuccess<{ queued: number }>>(`${A}/exams/${examId}/ai-mark`, {
+  aiStep: (examId: string, settings: AiSettings, clipIds: string[]) =>
+    http<ApiSuccess<{ results: AiStepResult[] }>>(`${A}/exams/${examId}/ai-mark/step`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...settings, guidance: settings.guidance || undefined, clip_ids: clipIds }),
     }),
+  aiResults: (examId: string, questionId: string) =>
+    http<ApiSuccess<AiResults>>(`${A}/exams/${examId}/ai-results?question_id=${questionId}`),
 
   // Admin
   listTeachers: () => http<ApiSuccess<TeacherOption[]>>(`${A}/teachers`),

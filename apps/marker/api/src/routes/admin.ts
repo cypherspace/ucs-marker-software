@@ -214,7 +214,7 @@ router.get('/overview', async (_req, res, next) => {
                   COUNT(DISTINCT sm.clip_id) AS clips_marked
              FROM script_clips sc
              JOIN exam_questions eq ON eq.id = sc.question_id
-             LEFT JOIN script_marks sm ON sm.clip_id = sc.id AND sm.status <> 'pending'
+             LEFT JOIN script_marks sm ON sm.clip_id = sc.id AND sm.status <> 'pending' AND sm.mark_source = 'human'
             GROUP BY eq.exam_id
          ) c ON c.exam_id = e.id
         ORDER BY e.created_at DESC`,

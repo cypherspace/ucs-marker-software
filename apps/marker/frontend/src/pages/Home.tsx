@@ -15,6 +15,8 @@ function Icon({ children }: { children: ReactNode }) {
 
 const MarkIcon = () => <Icon><path d="M4 12.5 9 17.5 20 6.5" /></Icon>;
 const ExamIcon = () => <Icon><path d="M8 4h8l3 3v13H5V4h3Z" /><path d="M9 11h6M9 15h6" /></Icon>;
+const AiIcon = () => <Icon><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3Z" /><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15Z" /></Icon>;
+const CompareIcon = () => <Icon><path d="M8 4v16M16 4v16" /><path d="M4 8h8M12 16h8" /></Icon>;
 const StaffIcon = () => <Icon><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" /><path d="M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.4c2 .7 3.5 2.6 3.5 5.6" /></Icon>;
 const ProgressIcon = () => <Icon><path d="M5 20V10M12 20V4M19 20v-7" /></Icon>;
 
@@ -45,7 +47,7 @@ export function Home() {
   }
 
   const me = meQ.data?.data;
-  const { marking, exams, progress, admin } = homeQ.data.data;
+  const { marking, exams, progress, admin, ai, comparative } = homeQ.data.data;
   const pct = progress.clips_total > 0 ? Math.round((progress.clips_marked / progress.clips_total) * 100) : 0;
   const nothingYet = exams.total === 0 && marking.assigned_questions === 0;
 
@@ -163,6 +165,53 @@ export function Home() {
             </>
           )}
         </HomeCard>
+        {comparative.questions > 0 && (
+          <HomeCard
+            icon={<CompareIcon />}
+            title="Comparative ranking"
+            actions={
+              comparative.next ? (
+                <LinkButton to={`/compare/${comparative.next.exam_id}/${comparative.next.question_id}`} variant="primary">Judge comparisons</LinkButton>
+              ) : (
+                <LinkButton to="/my-exams" variant="secondary">See my questions</LinkButton>
+              )
+            }
+          >
+            {comparative.pairs_left === 0 ? (
+              <p className="text-sm text-slate-500">No comparisons are waiting for you right now.</p>
+            ) : (
+              <>
+                <p className="text-3xl font-semibold text-slate-800">
+                  {comparative.pairs_left} <span className="text-base font-normal text-slate-500">to judge</span>
+                </p>
+                <p className="text-sm text-slate-500">
+                  Choose how many you will do; the AI can judge the rest.
+                  {comparative.next && <> Next: {comparative.next.exam_name}, Q{comparative.next.question_number}.</>}
+                </p>
+              </>
+            )}
+          </HomeCard>
+        )}
+
+        {progress.clips_total > 0 && (
+          <HomeCard
+            icon={<AiIcon />}
+            title="AI marking"
+            actions={
+              progress.latest_exam
+                ? <LinkButton to={`/exams/${progress.latest_exam.id}/ai`} variant="secondary">Open AI marking</LinkButton>
+                : <LinkButton to="/exams" variant="secondary">Choose an exam</LinkButton>
+            }
+          >
+            <p className="text-3xl font-semibold text-slate-800">
+              {ai.ai_marked} <span className="text-base font-normal text-slate-500">clips AI-marked</span>
+            </p>
+            <p className="text-sm text-slate-500">
+              AI marks sit alongside teachers' marks so you can compare them. A teacher's mark always counts first.
+            </p>
+          </HomeCard>
+        )}
+
         {admin && (
           <HomeCard
             icon={<StaffIcon />}

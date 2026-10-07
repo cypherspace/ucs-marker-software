@@ -42,4 +42,6 @@ export const config = {
   allowSignup: process.env.ALLOW_SIGNUP === 'true',
   cookieSecure: (process.env.COOKIE_SECURE ?? (process.env.NODE_ENV === 'production' ? 'true' : 'false')) === 'true',
   tokenEncryptionKey: tokenEncryptionKey(),
+  // Test switch: answer AI calls with deterministic fake output instead of calling Gemini.
+  aiStub: process.env.AI_STUB === '1',
 };

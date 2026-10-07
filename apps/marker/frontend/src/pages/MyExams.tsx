@@ -30,17 +30,20 @@ export function MyExams() {
                 {[exam.subject, exam.year_group, exam.exam_board].filter(Boolean).join(' · ')}
               </p>
               <div className="flex flex-wrap gap-2">
-                {exam.assigned_questions.map((q: ExamQuestion) => (
-                  <Link
-                    key={q.id}
-                    to={`/mark/${exam.id}/${q.id}`}
-                    className={buttonClass('secondary')}
-                  >
-                    <span>Mark Q{q.question_number}</span>
-                    <span className="text-slate-400">·</span>
-                    <span>{q.max_marks} marks</span>
-                  </Link>
-                ))}
+                {exam.assigned_questions.map((q: ExamQuestion) => {
+                  const comparative = q.marking_mode === 'comparative';
+                  return (
+                    <Link
+                      key={q.id}
+                      to={comparative ? `/compare/${exam.id}/${q.id}` : `/mark/${exam.id}/${q.id}`}
+                      className={buttonClass('secondary')}
+                    >
+                      <span>{comparative ? 'Compare' : 'Mark'} Q{q.question_number}</span>
+                      <span className="text-slate-400">·</span>
+                      <span>{comparative ? 'ranking' : `${q.max_marks} marks`}</span>
+                    </Link>
+                  );
+                })}
               </div>
             </div>
           ))}

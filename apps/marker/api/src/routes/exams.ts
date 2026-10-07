@@ -49,7 +49,7 @@ router.get('/', requireAuth, async (req, res, next) => {
       ? await db('script_clips as sc')
           .join('exam_questions as eq', 'eq.id', 'sc.question_id')
           .leftJoin('script_marks as sm', function () {
-            this.on('sm.clip_id', 'sc.id').andOnVal('sm.status', '<>', 'pending');
+            this.on('sm.clip_id', 'sc.id').andOnVal('sm.status', '<>', 'pending').andOnVal('sm.mark_source', 'human');
           })
           .whereIn('eq.exam_id', ids)
           .groupBy('eq.exam_id')
@@ -172,6 +172,7 @@ router.post('/:id/questions', requireAuth, requireRole(['teacher', 'admin']), as
     const QuestionSchema = z.object({
       question_number: z.string().trim().min(1).max(20),
       max_marks: z.number().int().min(0).max(100),
+      marking_mode: z.enum(['marks', 'comparative']).optional(),
       clip_coordinates: z.array(z.object({
         page: z.number().int().min(1),
         x: z.number(), y: z.number(), width: z.number(), height: z.number(),
@@ -194,6 +195,7 @@ router.post('/:id/questions', requireAuth, requireRole(['teacher', 'admin']), as
         exam_id: req.params.id,
         question_number: body.question_number,
         max_marks: body.max_marks,
+        ...(body.marking_mode ? { marking_mode: body.marking_mode } : {}),
         clip_coordinates: jsonbOrNull(body.clip_coordinates),
         ms_clip_coordinates: jsonbOrNull(body.ms_clip_coordinates),
         name_zones: jsonbOrNull(body.name_zones),
@@ -212,6 +214,7 @@ router.patch('/:examId/questions/:questionId', requireAuth, requireRole(['teache
     const UpdateSchema = z.object({
       question_number: z.string().trim().min(1).max(20).optional(),
       max_marks: z.number().int().min(0).max(100).optional(),
+      marking_mode: z.enum(['marks', 'comparative']).optional(),
       clip_coordinates: z.array(z.object({
         page: z.number().int().min(1),
         x: z.number(), y: z.number(), width: z.number(), height: z.number(),
@@ -246,6 +249,7 @@ router.patch('/:examId/questions/:questionId', requireAuth, requireRole(['teache
     const patch: Record<string, unknown> = {};
     if (body.question_number !== undefined) patch.question_number = body.question_number;
     if (body.max_marks !== undefined) patch.max_marks = body.max_marks;
+    if (body.marking_mode !== undefined) patch.marking_mode = body.marking_mode;
     if (body.clip_coordinates !== undefined) patch.clip_coordinates = jsonbOrNull(body.clip_coordinates);
     if (body.ms_clip_coordinates !== undefined) patch.ms_clip_coordinates = jsonbOrNull(body.ms_clip_coordinates);
     if (body.name_zones !== undefined) patch.name_zones = jsonbOrNull(body.name_zones);
@@ -359,32 +363,62 @@ router.delete('/:id/assignments', requireAuth, requireRole(['teacher', 'admin'])
   }
 });
 
-// Get marking progress for exam
+// Get marking progress for exam. "Marked" means a teacher has marked the clip;
+// AI marks are counted separately, and "covered" means any mark counts (human, else AI).
 router.get('/:id/progress', requireAuth, async (req, res, next) => {
   try {
-    const questions = await db('exam_questions').where({ exam_id: req.params.id });
-    const progress = await Promise.all(questions.map(async (q) => {
-      const total = await db('script_clips').where({ question_id: q.id }).count('id as n').first<{ n: string }>();
-      const marked = await db('script_marks')
-        .join('script_clips as sc', 'sc.id', 'script_marks.clip_id')
-        .where('sc.question_id', q.id)
-        .whereNot('script_marks.status', 'pending')
-        .countDistinct('script_marks.clip_id as n')
-        .first<{ n: string }>();
-      const teachers = await db('marking_assignments as ma')
-        .join('users as u', 'u.id', 'ma.teacher_id')
-        .where('ma.question_id', q.id)
-        .select('ma.teacher_id', 'u.email');
-      return {
-        question_id: q.id,
-        question_number: q.question_number,
-        max_marks: q.max_marks,
-        total_clips: Number(total?.n ?? 0),
-        marked_clips: Number(marked?.n ?? 0),
-        teachers,
-      };
-    }));
-    res.json({ data: { exam_id: req.params.id, questions: progress } });
+    const questions = (await db.raw(
+      `SELECT eq.id AS question_id, eq.question_number, eq.max_marks, eq.marking_mode,
+              COUNT(sc.id) AS total_clips,
+              COUNT(sc.id) FILTER (WHERE EXISTS (
+                SELECT 1 FROM script_marks sm WHERE sm.clip_id = sc.id AND sm.mark_source = 'human'
+                   AND sm.status <> 'pending' AND sm.marks_awarded IS NOT NULL)) AS marked_clips,
+              COUNT(sc.id) FILTER (WHERE EXISTS (
+                SELECT 1 FROM script_marks sm WHERE sm.clip_id = sc.id AND sm.mark_source = 'ai'
+                   AND sm.marks_awarded IS NOT NULL)) AS ai_marked_clips,
+              COUNT(sc.id) FILTER (WHERE EXISTS (
+                SELECT 1 FROM script_marks sm WHERE sm.clip_id = sc.id
+                   AND sm.status <> 'pending' AND sm.marks_awarded IS NOT NULL)) AS covered_clips
+         FROM exam_questions eq
+         LEFT JOIN script_clips sc ON sc.question_id = eq.id
+        WHERE eq.exam_id = ?
+        GROUP BY eq.id, eq.question_number, eq.max_marks, eq.marking_mode
+        ORDER BY eq.question_number`,
+      [req.params.id],
+    )).rows as {
+      question_id: string; question_number: string; max_marks: number; marking_mode: string;
+      total_clips: string; marked_clips: string; ai_marked_clips: string; covered_clips: string;
+    }[];
+    const teachers = (await db.raw(
+      `SELECT ma.question_id, ma.teacher_id, u.email, COUNT(sm.id) AS marked
+         FROM marking_assignments ma
+         JOIN users u ON u.id = ma.teacher_id
+         LEFT JOIN script_clips sc ON sc.question_id = ma.question_id
+         LEFT JOIN script_marks sm ON sm.clip_id = sc.id AND sm.marker_id = ma.teacher_id AND sm.status <> 'pending'
+        WHERE ma.exam_id = ?
+        GROUP BY ma.question_id, ma.teacher_id, u.email
+        ORDER BY u.email`,
+      [req.params.id],
+    )).rows as { question_id: string; teacher_id: string; email: string; marked: string }[];
+
+    res.json({
+      data: {
+        exam_id: req.params.id,
+        questions: questions.map((q) => ({
+          question_id: q.question_id,
+          question_number: q.question_number,
+          max_marks: q.max_marks,
+          marking_mode: q.marking_mode,
+          total_clips: Number(q.total_clips),
+          marked_clips: Number(q.marked_clips),
+          ai_marked_clips: Number(q.ai_marked_clips),
+          covered_clips: Number(q.covered_clips),
+          teachers: teachers.filter((t) => t.question_id === q.question_id).map((t) => ({
+            teacher_id: t.teacher_id, email: t.email, marked: Number(t.marked), total: Number(q.total_clips),
+          })),
+        })),
+      },
+    });
   } catch (err) {
     next(err);
   }

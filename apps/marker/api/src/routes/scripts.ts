@@ -7,6 +7,7 @@ import { isDriveUri, fileIdFromUri, getDownloadUrl, uploadFile, createExamFolder
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
+import { requireClipAccess } from '../services/access.js';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 
 const router = Router();
@@ -281,6 +282,7 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
 // Get a signed/local URL for a script's full PDF
 router.get('/clips/:id/script', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireClipAccess(req, res, req.params.id))) return;
     const clip = await db('script_clips as sc')
       .join('student_scripts as ss', 'ss.id', 'sc.script_id')
       .join('exams as e', 'e.id', 'ss.exam_id')

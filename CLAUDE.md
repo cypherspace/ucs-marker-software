@@ -28,6 +28,14 @@ UCS Automatic Marking System: online marking of scanned student exam scripts wit
 - Multi-region clipping: a question can have several `ClipRegion`s across pages; the extractor stitches them vertically.
 - The API calls the extractor via `services/extractor.ts` (`extractorFetch`), which adds a Cloud Run ID token when `EXTRACTOR_URL` is https. Do not use bare `fetch` for extractor calls.
 - `/files/` requires auth and local reads are confined to the storage dir.
+- `/admin` is a frontend route; only `/admin/v1` is API (Vite proxy and the production page fallback both depend on that).
+- Who may work on a question is decided in one place, `services/access.ts` (`requireQuestionAccess` / `requireClipAccess`): admin, the exam's lead teacher, or a teacher assigned to it. Use it for any route that touches clips, marks, AI or comparisons.
+- Marks: a clip can have a teacher's mark and an AI mark. The mark that counts is moderated, else latest human, else AI (`services/finalMark.ts`). Progress "marked" figures count teachers' marks only. Never join `script_marks` directly in a report; use `finalMarks()`.
+- AI runs (marking and judging) are driven by the browser in steps of up to 3 items (`/ai-mark/plan` then `/ai-mark/step`, and the `ai-judge` equivalents), not by background work, because Cloud Run throttles CPU after a response. Clip images for AI must go through `services/clipImages.ts` so Drive-stored clips work.
+- Set `AI_STUB=1` to answer AI and transcription calls with deterministic fake output (no Gemini key needed) when testing locally.
+- Comparative marking: `exam_questions.marking_mode` is `marks` or `comparative`. Pairs live in `comparative_pairs` (one per two scripts per question, any order); judgements in `comparative_judgements` (one human and one AI per pair; a human judgement overrides the AI's). Ranking is Bradley-Terry (`services/ranking.ts`, unit-tested).
+- Deactivated users (`users.disabled_at`) keep their data but cannot sign in; every admin action and question edit/delete is written to `audit_log` via `services/audit.ts`.
+- Unit tests: `npm test` (vitest, API only). Browser checks used Playwright against the dev servers.
 - TypeScript: after adding a column in a migration, update the `Exam`/etc. interfaces in `packages/shared-types/src/index.ts`, or `tsc -b` fails in the frontend build.
 
 ## Production (GCP)
@@ -59,7 +67,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "marker-sa@ucs-
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "marker-sa@ucs-marking-software.iam";
 ```
 
-Applied: 001 to 004. Any new migration must be applied the same way. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
+Applied: 001 to 004. **005 (user deactivation) and 006 (AI marks, comparative marking) have not been applied to production yet.** Any new migration must be applied the same way, then re-run the `GRANT` statements above so `marker-sa` can use new tables and columns. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
 
 ### Secrets gotcha
 
