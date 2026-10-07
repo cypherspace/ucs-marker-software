@@ -130,6 +130,10 @@ Secrets created from PowerShell got a UTF-8 BOM, which broke the `TOKEN_ENCRYPTI
 - Migrations are still manual (`infra/db/marker/migrate-cloudsql.mjs`); running them in the pipeline would need the app's database account to own or alter tables.
 - Branching: `main` is what is deployed. Cloud sessions and day-to-day work start from `dev` (kept equal to `main` after each release: fast-forward it with `git merge --ff-only origin/main`), then PR into `main` to release.
 
+## Future possibilities (low priority, not planned)
+
+- **Google Classroom integration** (import a chosen assignment's submissions, annotate, maybe return marks): feasibility check and a phased outline are in `docs/future/google-classroom-integration.md`. Key facts: importing is feasible but needs the project moved under a school Workspace organisation (Internal user type) to use a restricted Drive scope; the plain Classroom API cannot grade assignments the app did not create, so marks back needs app-created assignments or a Classroom add-on, otherwise a marks export. Do not start it without the owner asking.
+
 ## Working in a fresh checkout
 
 `git checkout dev && git pull`, `npm install` (if packages look incomplete, delete `node_modules` and run `npm ci`), `docker compose up -d postgres`, `npm run migrate:up`, then the three dev servers as described above. Use `AUTH_DISABLED=true` for a quick look and `AI_STUB=1` to try AI features without a Gemini key. To see the Drive picker locally, set `VITE_GOOGLE_CLIENT_ID`, `VITE_GOOGLE_API_KEY` and `VITE_GOOGLE_PROJECT_NUMBER` in the root `.env`. Checks: `npm run build`, `npm test`, and `npx tsc --noEmit` in `apps/marker/api`.
