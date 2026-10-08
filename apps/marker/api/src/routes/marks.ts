@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { storage } from '../services/storage.js';
 import { getClipBytes } from '../services/clipImages.js';
+import { convertedUrl } from '../services/converted.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireClipAccess, requireQuestionAccess } from '../services/access.js';
 
@@ -11,6 +12,8 @@ const router = Router();
 const AnnotationSchema = z.object({
   id: z.string(),
   type: z.enum(['tick', 'cross', 'numbered_tick', 'numbered_cross', 'circle', 'underline', 'ruler', 'text', 'mark_tick']),
+  // 'clip' (or none) = on the script image; 'text' = on the converted-handwriting page
+  layer: z.enum(['clip', 'text']).optional(),
   x: z.number(),
   y: z.number(),
   color: z.string(),
@@ -87,12 +90,13 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
     const clip = await db('script_clips as sc')
       .where('sc.id', list[index].id)
       .first<{
-        id: string; script_id: string; ocr_text: string | null;
+        id: string; script_id: string; ocr_text: string | null; text_image_url: string | null;
         clip_source: string; reclipped_at: string | null; changed_after_marking: boolean;
       }>(
         'sc.id as id',
         'sc.script_id as script_id',
         'sc.ocr_text as ocr_text',
+        'sc.text_image_url as text_image_url',
         'sc.clip_source as clip_source',
         'sc.reclipped_at as reclipped_at',
         // A clip re-selected after someone marked it: earlier marks may refer to the old crop
@@ -152,6 +156,7 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
           ? { marks_awarded: ai.marks_awarded, reasoning: ai.ai_reasoning, feedback: ai.ai_feedback, model: ai.ai_model }
           : null,
         ocr_text: clip.ocr_text,
+        converted_url: convertedUrl(clip.id, clip.text_image_url),
       },
     });
   } catch (err) {
@@ -247,6 +252,24 @@ router.get('/clips/:id/image', requireAuth, async (req, res, next) => {
     const clip = await requireClipAccess(req, res, req.params.id);
     if (!clip) return;
     const bytes = await getClipBytes(clip.clip_image_url, clip.lead_teacher_id);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.send(bytes);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// The converted-handwriting page for a clip (see routes/ai.ts), streamed the same way as the clip image
+router.get('/clips/:id/text-image', requireAuth, async (req, res, next) => {
+  try {
+    const clip = await requireClipAccess(req, res, req.params.id);
+    if (!clip) return;
+    const row = await db('script_clips').where({ id: clip.clip_id }).first<{ text_image_url: string | null }>('text_image_url');
+    if (!row?.text_image_url) {
+      res.status(404).json({ error: 'This clip has not been converted yet', code: 'NOT_CONVERTED' }); return;
+    }
+    const bytes = await getClipBytes(row.text_image_url, clip.lead_teacher_id);
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'private, no-cache');
     res.send(bytes);

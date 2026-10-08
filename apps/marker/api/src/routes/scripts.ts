@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Router, type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
@@ -8,6 +9,7 @@ import { scriptPdfSource } from '../services/scriptSource.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
+import { stripTextLayer } from '../services/converted.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -192,6 +194,11 @@ async function loadClipJob(
   return { exam, scripts, questions };
 }
 
+// A fingerprint of what a clip image is cut from, kept on the clip to tell whether re-clipping changes it
+function clipSignature(q: ClipQuestion | undefined): string | null {
+  return q ? createHash('sha1').update(JSON.stringify([q.clip_coordinates ?? [], q.name_zones ?? []])).digest('hex') : null;
+}
+
 // Clip every question for one script. Clips chosen by hand for this script are left alone.
 // `fatal` means every other script would fail the same way (the clipping service is down).
 async function clipOneScript(
@@ -255,9 +262,26 @@ async function clipOneScript(
   }
 
   if (result.clips.length) {
+    const questionById = new Map(todo.map((q) => [q.id, q]));
+    const before = await db('script_clips')
+      .where({ script_id: script.id })
+      .whereIn('question_id', result.clips.map((c) => c.question_id))
+      .select<{ id: string; question_id: string; clip_signature: string | null }[]>('id', 'question_id', 'clip_signature');
     await db('script_clips')
-      .insert(result.clips.map((c) => ({ script_id: c.script_id, question_id: c.question_id, clip_image_url: c.clip_image_url })))
-      .onConflict(['script_id', 'question_id']).merge(['clip_image_url']);
+      .insert(result.clips.map((c) => ({
+        script_id: c.script_id, question_id: c.question_id, clip_image_url: c.clip_image_url,
+        clip_signature: clipSignature(questionById.get(c.question_id)),
+      })))
+      .onConflict(['script_id', 'question_id']).merge(['clip_image_url', 'clip_signature']);
+    // The converted handwriting (and any ticks placed on it) belongs to the old crop. Discard it only
+    // when the regions or name zones really changed, not on every re-run of clipping.
+    const changed = before
+      .filter((b) => b.clip_signature && b.clip_signature !== clipSignature(questionById.get(b.question_id)))
+      .map((b) => b.id);
+    if (changed.length) {
+      await db('script_clips').whereIn('id', changed).update({ ocr_text: null, text_image_url: null });
+      await stripTextLayer(changed);
+    }
   }
   return { made: result.clips.length, kept: manual.size };
 }
