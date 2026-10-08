@@ -3,26 +3,15 @@ import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
 import type { ExamQuestion } from '@marker/shared-types';
-import {
-  CoordinatePicker,
-  toClipRegions,
-  toNameZones,
-  fromQuestionRegions,
-  type DrawnRegion,
-  type RegionType,
-} from '../components/CoordinatePicker';
 import { DrivePicker, driveConfigured } from '../components/DrivePicker';
 import { UploadQueuePanel } from '../components/UploadQueuePanel';
-import { ScriptClipEditor } from '../components/ScriptClipEditor';
+import { QuestionClipper, type ClipperMode, type ClipperResult } from '../components/QuestionClipper';
 import { ClipRunPanel } from '../components/ClipRunPanel';
+import { Button } from '../components/ui';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 import { useUploadQueue } from '../hooks/useUploadQueue';
 
 type SetupTab = 'scripts' | 'questions' | 'assign';
-
-// Compare region sets ignoring their generated ids.
-const strip = (rs: DrawnRegion[]) =>
-  rs.map(({ type, page, x, y, width, height }) => [type, page, Math.round(x), Math.round(y), Math.round(width), Math.round(height)]);
 
 export function ExamSetup() {
   const { id } = useParams<{ id: string }>();
@@ -93,19 +82,6 @@ export function ExamSetup() {
     onDone: () => qc.invalidateQueries({ queryKey: ['exam', id] }),
   });
 
-  // ── Question definition ───────────────────────────────────────────────────
-  const [newQ, setNewQ] = useState({ question_number: '', max_marks: '' });
-  const addQuestionMutation = useMutation({
-    mutationFn: () => api.createQuestion(id!, {
-      question_number: newQ.question_number,
-      max_marks: Number(newQ.max_marks),
-    }),
-    onSuccess: () => {
-      setNewQ({ question_number: '', max_marks: '' });
-      qc.invalidateQueries({ queryKey: ['questions', id] });
-    },
-  });
-
   // ── Question edit / delete ────────────────────────────────────────────────
   const [editingQId, setEditingQId] = useState<string | null>(null);
   const [editNumber, setEditNumber] = useState('');
@@ -167,53 +143,37 @@ export function ExamSetup() {
     qc.invalidateQueries({ queryKey: ['assignments', id] });
   }
 
-  // ── Region drawing (CoordinatePicker) ─────────────────────────────────────
-  const [editingQuestion, setEditingQuestion] = useState<ExamQuestion | null>(null);
-  const [initialRegions, setInitialRegions] = useState<DrawnRegion[]>([]);
-  const [editorRegions, setEditorRegions] = useState<DrawnRegion[]>([]);
-  const [editorPage, setEditorPage] = useState(1);
-  const [pageCount, setPageCount] = useState<number | null>(null);
-  const [editorType, setEditorType] = useState<RegionType>('question');
-  const [templateScriptId, setTemplateScriptId] = useState<string>('');
-  const [scriptOnlyEditor, setScriptOnlyEditor] = useState(false);
+  // ── The clipping window (add questions / edit regions / mark scheme) ──────
+  const [clipper, setClipper] = useState<{ mode: ClipperMode; question?: ExamQuestion } | null>(null);
   const [reclip, setReclip] = useState<{ question: ExamQuestion; clips: number; marked: number } | null>(null);
+  const [notice, setNotice] = useState<{ text: string; tone: 'ok' | 'error'; generate?: boolean } | null>(null);
 
-  function openRegionEditor(q: ExamQuestion) {
-    const regions = fromQuestionRegions(q);
-    setEditingQuestion(q);
-    setInitialRegions(regions);
-    setEditorRegions(regions);
-    setEditorPage(1);
-    setPageCount(null);
-    setEditorType('question');
-    setTemplateScriptId(scripts[0]?.id ?? '');
-  }
-
-  function closeRegionEditor() {
-    const dirty = JSON.stringify(strip(editorRegions)) !== JSON.stringify(strip(initialRegions));
-    if (dirty && !window.confirm('Discard the changes you made to these regions?')) return;
-    setEditingQuestion(null);
-  }
-
-  const saveRegionsMutation = useMutation({
-    mutationFn: () => api.updateQuestion(id!, editingQuestion!.id, {
-      clip_coordinates: toClipRegions(editorRegions, 'question'),
-      ms_clip_coordinates: toClipRegions(editorRegions, 'ms'),
-      name_zones: toNameZones(editorRegions),
-    }),
-    onSuccess: async () => {
-      const q = editingQuestion!;
-      setEditingQuestion(null);
-      refreshQuestions();
-      // If crops were already generated for this question they are now out of date.
+  async function handleClipperFinish(result: ClipperResult) {
+    setClipper(null);
+    refreshQuestions();
+    qc.invalidateQueries({ queryKey: ['exam', id] });
+    if (result.added) {
+      setNotice({
+        text: `Added ${result.added} question${result.added === 1 ? '' : 's'}. Generate the clips when you have also set up the mark scheme (or now, if there isn't one).`,
+        tone: 'ok',
+        generate: true,
+      });
+    } else if (result.msClipped !== undefined) {
+      setNotice({ text: `Mark scheme clipped: ${result.msClipped} question${result.msClipped === 1 ? '' : 's'} now have a mark-scheme image for markers.`, tone: 'ok' });
+    } else if (result.msError) {
+      setNotice({ text: `The mark-scheme regions were saved, but clipping them failed: ${result.msError}. Generate Clips will try again.`, tone: 'error' });
+    }
+    // If crops were already generated for a question whose regions changed, they are now out of date.
+    if (result.changedQuestion) {
+      const q = result.changedQuestion;
       try {
         const progress = await api.getProgress(id!);
         const p = progress.data.questions.find((x) => x.question_id === q.id);
         if (p && p.total_clips > 0) setReclip({ question: q, clips: p.total_clips, marked: p.marked_clips });
         else setReclip(null);
       } catch { /* the banner is a convenience only */ }
-    },
-  });
+    }
+  }
 
   // ── Assignments ───────────────────────────────────────────────────────────
   const [assignTeacher, setAssignTeacher] = useState('');
@@ -357,40 +317,55 @@ export function ExamSetup() {
       {tab === 'questions' && (
         <div className="space-y-4">
           <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="font-medium text-slate-700 mb-3">Define Question Regions</h2>
+            <h2 className="font-medium text-slate-700 mb-1">Questions</h2>
             <p className="text-xs text-slate-500 mb-3">
-              Add each question/part and its mark allocation. After adding questions here,
-              use the coordinate tool to draw clip regions on the exam paper PDFs.
+              <strong>Add questions</strong> opens a script: type the question number and marks, draw the question on
+              the page, and carry straight on to the next question. When the questions are in,{' '}
+              <strong>Clip the mark scheme</strong> shows the mark scheme itself so you can draw each answer's region on it.
             </p>
-            <div className="flex gap-3 mb-3">
-              <input
-                type="text"
-                placeholder="e.g. 1a"
-                value={newQ.question_number}
-                onChange={(e) => setNewQ((q) => ({ ...q, question_number: e.target.value }))}
-                className="w-24 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
-              />
-              <input
-                type="number"
-                placeholder="Marks"
-                min={1}
-                max={50}
-                value={newQ.max_marks}
-                onChange={(e) => setNewQ((q) => ({ ...q, max_marks: e.target.value }))}
-                className="w-20 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
-              />
-              <button
-                onClick={() => addQuestionMutation.mutate()}
-                disabled={!newQ.question_number || !newQ.max_marks || addQuestionMutation.isPending}
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="primary"
+                onClick={() => { setNotice(null); setClipper({ mode: 'add' }); }}
+                disabled={scripts.length === 0}
+                title={scripts.length === 0 ? 'Upload a script first, so there is something to draw on' : 'Add questions by drawing them on a script'}
               >
-                Add
-              </button>
+                Add questions
+              </Button>
+              <Button
+                onClick={() => { setNotice(null); setClipper({ mode: 'mark-scheme' }); }}
+                disabled={!exam?.mark_scheme_pdf_url || questions.length === 0}
+                title={
+                  !exam?.mark_scheme_pdf_url ? 'Upload the mark scheme first (on the Scripts tab)'
+                  : questions.length === 0 ? 'Add some questions first'
+                  : 'Draw each question\'s region on the mark scheme'
+                }
+              >
+                Clip the mark scheme
+              </Button>
+              {scripts.length === 0 && <span className="text-xs text-slate-500">Upload a script first (Scripts tab).</span>}
+              {scripts.length > 0 && !exam?.mark_scheme_pdf_url && (
+                <span className="text-xs text-slate-500">No mark scheme uploaded yet (Scripts tab).</span>
+              )}
             </div>
-            {addQuestionMutation.error && (
-              <p role="alert" className="text-sm text-red-700">{(addQuestionMutation.error as Error).message}</p>
-            )}
           </div>
+
+          {notice && (
+            <div
+              role="status"
+              className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${
+                notice.tone === 'ok' ? 'border-green-200 bg-green-50 text-green-900' : 'border-red-200 bg-red-50 text-red-800'
+              }`}
+            >
+              <span className="min-w-0 flex-1">{notice.text}</span>
+              {notice.generate && (
+                <Button variant="primary" onClick={() => { setNotice(null); void runClipping(); }} disabled={clipBusy}>
+                  Generate clips now
+                </Button>
+              )}
+              <button onClick={() => setNotice(null)} className="text-xs underline">Dismiss</button>
+            </div>
+          )}
 
           {reclip && (
             <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -506,14 +481,31 @@ export function ExamSetup() {
                               </span>
                             );
                           })()}
+                          <span
+                            className={`rounded-full px-2 py-0.5 ${
+                              (q.ms_clip_coordinates ?? []).length > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
+                            }`}
+                            title="Where this question's answer is on the mark scheme"
+                          >
+                            {(q.ms_clip_coordinates ?? []).length > 0 ? 'Mark scheme ✓' : 'No mark scheme region'}
+                          </span>
                           <button
-                            onClick={() => openRegionEditor(q)}
+                            onClick={() => { setNotice(null); setClipper({ mode: 'edit', question: q }); }}
                             disabled={scripts.length === 0}
                             title={scripts.length === 0 ? 'Upload a script first to draw on' : 'Draw or edit clip regions'}
                             className="rounded bg-indigo-600 px-2.5 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
                           >
                             {(q.clip_coordinates ?? []).length > 0 ? 'Edit regions' : 'Draw regions'}
                           </button>
+                          {exam?.mark_scheme_pdf_url && (
+                            <button
+                              onClick={() => { setNotice(null); setClipper({ mode: 'mark-scheme', question: q }); }}
+                              title="Draw this question's region on the mark scheme"
+                              className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+                            >
+                              Mark scheme
+                            </button>
+                          )}
                           <button
                             onClick={() => startEditing(q)}
                             className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
@@ -592,149 +584,17 @@ export function ExamSetup() {
         </div>
       )}
 
-      {/* Region drawing modal */}
-      {editingQuestion && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={closeRegionEditor}
-        >
-          <div
-            role="dialog"
-            aria-label={`Draw regions for question ${editingQuestion.question_number}`}
-            className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal header / toolbar */}
-            <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 px-4 py-2.5">
-              <span className="font-medium text-slate-700">Regions: Q{editingQuestion.question_number}</span>
-
-              <div className="ml-2 flex items-center gap-1 rounded-lg border border-slate-200 p-0.5 text-xs">
-                {([['question', 'Question'], ['ms', 'Mark scheme'], ['name_zone', 'Name zone']] as [RegionType, string][]).map(([t, label]) => (
-                  <button
-                    key={t}
-                    onClick={() => setEditorType(t)}
-                    className={`rounded px-2.5 py-1 font-medium transition-colors ${editorType === t ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              {(() => {
-                const pagesWithRegions = new Set(editorRegions.map((r) => r.page));
-                const lastPage = pageCount ?? Infinity;
-                return (
-                  <div className="flex items-center gap-1 text-xs text-slate-600">
-                    <span>Page</span>
-                    <button
-                      onClick={() => setEditorPage((p) => Math.max(1, p - 1))}
-                      disabled={editorPage <= 1}
-                      aria-label="Previous page"
-                      className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200 disabled:opacity-40"
-                    >
-                      −
-                    </button>
-                    <span className="relative min-w-[3.5rem] text-center font-medium">
-                      {editorPage}{pageCount ? ` of ${pageCount}` : ''}
-                      {pagesWithRegions.has(editorPage) && (
-                        <span className="absolute -right-1 -top-0.5 h-1.5 w-1.5 rounded-full bg-indigo-500" />
-                      )}
-                    </span>
-                    <button
-                      onClick={() => setEditorPage((p) => Math.min(lastPage, p + 1))}
-                      disabled={editorPage >= lastPage}
-                      aria-label="Next page"
-                      className="rounded bg-slate-100 px-2 py-1 hover:bg-slate-200 disabled:opacity-40"
-                    >
-                      +
-                    </button>
-                  </div>
-                );
-              })()}
-
-              {scripts.length > 1 && (
-                <select
-                  value={templateScriptId}
-                  onChange={(e) => { setTemplateScriptId(e.target.value); setPageCount(null); setEditorPage(1); }}
-                  className="rounded border border-slate-300 px-2 py-1 text-xs"
-                  title="Script used as the layout template"
-                  aria-label="Template script"
-                >
-                  {scripts.map((s) => <option key={s.id} value={s.id}>Script {s.student_number}</option>)}
-                </select>
-              )}
-              {scripts.length === 1 && (
-                <span className="text-xs text-slate-500">Script {scripts[0].student_number}</span>
-              )}
-
-              {templateScriptId && (
-                <button
-                  onClick={() => setScriptOnlyEditor(true)}
-                  title="Choose different pages or areas for just the selected script, e.g. a typed or scribed paper, or one with pages missing"
-                  className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Clip this script differently…
-                </button>
-              )}
-
-              <button onClick={closeRegionEditor} aria-label="Close" className="ml-auto text-slate-400 hover:text-slate-600">✕</button>
-            </div>
-
-            {/* Canvas */}
-            <div className="min-h-0 flex-1 overflow-auto p-4">
-              {templateScriptId ? (
-                <CoordinatePicker
-                  key={`${editingQuestion.id}-${templateScriptId}`}
-                  scriptId={templateScriptId}
-                  page={editorPage}
-                  initialRegions={editorRegions}
-                  onRegionsChange={setEditorRegions}
-                  activeType={editorType}
-                  onPageCount={(n) => { setPageCount(n); setEditorPage((p) => Math.min(p, n)); }}
-                  onRequestPage={setEditorPage}
-                />
-              ) : (
-                <div className="text-sm text-slate-500">No script available to draw on. Upload a script first.</div>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center gap-3 border-t border-slate-200 px-4 py-2.5">
-              <span className="text-xs text-slate-500">
-                Drag on the page to draw a {editorType === 'name_zone' ? 'name zone (blacked out)' : editorType === 'ms' ? 'mark-scheme region' : 'question region'}.
-                Move between pages to add regions on several pages; they are stitched into one image at clip time.
-              </span>
-              {saveRegionsMutation.error && (
-                <span role="alert" className="text-xs text-red-600">{(saveRegionsMutation.error as Error).message}</span>
-              )}
-              <div className="ml-auto flex gap-2">
-                <button onClick={closeRegionEditor} className="rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100">Cancel</button>
-                <button
-                  onClick={() => saveRegionsMutation.mutate()}
-                  disabled={saveRegionsMutation.isPending}
-                  className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                >
-                  {saveRegionsMutation.isPending ? 'Saving…' : 'Save regions'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {scriptOnlyEditor && editingQuestion && templateScriptId && (
-        <ScriptClipEditor
-          scriptId={templateScriptId}
-          scriptLabel={`Script ${scripts.find((s) => s.id === templateScriptId)?.student_number ?? ''}`}
-          questionId={editingQuestion.id}
-          questionNumber={editingQuestion.question_number}
-          defaultRegions={editingQuestion.clip_coordinates}
-          defaultNameZones={editingQuestion.name_zones}
-          onClose={() => setScriptOnlyEditor(false)}
-          onSaved={() => {
-            setScriptOnlyEditor(false);
-            qc.invalidateQueries({ queryKey: ['progress', id] });
-          }}
+      {clipper && (
+        <QuestionClipper
+          key={`${clipper.mode}-${clipper.question?.id ?? 'none'}`}
+          examId={id!}
+          mode={clipper.mode}
+          scripts={scripts}
+          questions={questions}
+          question={clipper.question}
+          markSchemeKey={exam?.mark_scheme_pdf_url ?? undefined}
+          onChanged={refreshQuestions}
+          onFinish={(result) => void handleClipperFinish(result)}
         />
       )}
     </div>

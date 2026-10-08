@@ -3,7 +3,7 @@ import { Stage, Layer, Image as KonvaImage, Rect, Text, Transformer } from 'reac
 import type Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import type { ClipRegion, NameZone } from '@marker/shared-types';
-import { api, HttpError } from '../api';
+import { HttpError } from '../api';
 
 export type RegionType = 'question' | 'ms' | 'name_zone';
 
@@ -28,8 +28,13 @@ const toPx = (n: number) => n / PT_PER_PX;
 const MIN_SIZE = 10;
 const MAX_HISTORY = 50;
 
+export interface PageImage { objectUrl: string; pageCount: number | null }
+
 interface Props {
-  scriptId: string;
+  // Identifies the document being drawn on (a script, or the mark scheme); a new key reloads the page image
+  sourceKey: string;
+  // Fetches one rendered page of that document
+  loadPage: (page: number) => Promise<PageImage>;
   page: number;
   // Regions to start from. Remount (change `key`) to reset for another question.
   initialRegions?: DrawnRegion[];
@@ -78,7 +83,7 @@ function describeError(e: unknown): string {
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), Math.max(min, max));
 
 export function CoordinatePicker({
-  scriptId, page, initialRegions = [], onRegionsChange, activeType, onPageCount, onRequestPage,
+  sourceKey, loadPage, page, initialRegions = [], onRegionsChange, activeType, onPageCount, onRequestPage,
 }: Props) {
   const [imgState, setImgState] = useState<ImageState>({ status: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
@@ -93,13 +98,15 @@ export function CoordinatePicker({
   const trRef = useRef<Konva.Transformer>(null);
   const onPageCountRef = useRef(onPageCount);
   onPageCountRef.current = onPageCount;
+  const loadPageRef = useRef(loadPage);
+  loadPageRef.current = loadPage;
 
   // ── Page image ────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     let objectUrl: string | null = null;
     setImgState({ status: 'loading' });
-    api.fetchScriptPage(scriptId, page)
+    loadPageRef.current(page)
       .then(({ objectUrl: url, pageCount }) => {
         objectUrl = url;
         if (cancelled) return;
@@ -114,7 +121,7 @@ export function CoordinatePicker({
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [scriptId, page, reloadKey]);
+  }, [sourceKey, page, reloadKey]);
 
   const image = imgState.status === 'ready' ? imgState.img : null;
   const imgWidth = image?.width ?? 800;

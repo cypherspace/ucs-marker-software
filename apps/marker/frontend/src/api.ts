@@ -141,6 +141,26 @@ export const api = {
     return { objectUrl: URL.createObjectURL(await res.blob()), pageCount: Number.isFinite(count) && count > 0 ? count : null };
   },
 
+  // The mark scheme PDF rendered page by page (lead teacher / admin), for drawing mark-scheme regions on it
+  fetchMarkSchemePage: async (examId: string, page: number): Promise<{ objectUrl: string; pageCount: number | null }> => {
+    const res = await fetch(`${A}/exams/${examId}/mark-scheme/render?page=${page}`, { credentials: 'include' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
+      throw new HttpError(
+        res.status,
+        (body as { error?: string }).error ?? `HTTP ${res.status}`,
+        (body as { code?: string }).code,
+        body as Record<string, unknown>,
+      );
+    }
+    const count = Number(res.headers.get('x-page-count'));
+    return { objectUrl: URL.createObjectURL(await res.blob()), pageCount: Number.isFinite(count) && count > 0 ? count : null };
+  },
+  // Clip the mark scheme now: one image per question that has a mark-scheme region
+  clipMarkScheme: (examId: string) =>
+    http<ApiSuccess<{ ms_clips_created: number }>>(`${A}/exams/${examId}/mark-scheme/clip`, { method: 'POST' }),
+
   // Assignments
   listAssignments: (examId: string) => http<ApiSuccess<MarkingAssignment[]>>(`${A}/${examId}/assignments`),
   createAssignment: (examId: string, body: { teacher_id: string; question_id: string }) =>
