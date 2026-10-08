@@ -14,11 +14,14 @@ router.get('/home', requireAuth, async (req, res, next) => {
     const isAdmin = req.user!.role === 'admin';
 
     const visibleExams = isAdmin
-      ? 'SELECT id FROM exams'
+      ? 'SELECT id FROM exams WHERE archived_at IS NULL'
       : `SELECT e.id FROM exams e
-         WHERE e.lead_teacher_id = :uid
-            OR EXISTS (SELECT 1 FROM marking_assignments ma WHERE ma.exam_id = e.id AND ma.teacher_id = :uid)`;
-    const ledExams = isAdmin ? 'SELECT id FROM exams' : 'SELECT id FROM exams WHERE lead_teacher_id = :uid';
+         WHERE e.archived_at IS NULL
+           AND (e.lead_teacher_id = :uid
+                OR EXISTS (SELECT 1 FROM marking_assignments ma WHERE ma.exam_id = e.id AND ma.teacher_id = :uid))`;
+    const ledExams = isAdmin
+      ? 'SELECT id FROM exams WHERE archived_at IS NULL'
+      : 'SELECT id FROM exams WHERE archived_at IS NULL AND lead_teacher_id = :uid';
 
     const statusRows = (await db.raw(
       `SELECT status, COUNT(*) AS n FROM exams WHERE id IN (${visibleExams}) GROUP BY status`,
@@ -42,7 +45,7 @@ router.get('/home', requireAuth, async (req, res, next) => {
          LEFT JOIN script_clips sc ON sc.question_id = eq.id
          LEFT JOIN script_marks sm ON sm.clip_id = sc.id AND sm.marker_id = :uid AND sm.mark_source = 'human'
                                   AND sm.status <> 'pending'
-        WHERE ma.teacher_id = :uid
+        WHERE ma.teacher_id = :uid AND e.archived_at IS NULL
         GROUP BY ma.exam_id, e.name, e.created_at, eq.id, eq.question_number
         ORDER BY e.created_at, eq.question_number`,
       { uid },
@@ -94,7 +97,7 @@ router.get('/home', requireAuth, async (req, res, next) => {
          JOIN exams e ON e.id = eq.exam_id
          LEFT JOIN comparative_pairs p ON p.question_id = eq.id
          LEFT JOIN comparative_judgements h ON h.pair_id = p.id AND h.source = 'human'
-        WHERE ma.teacher_id = :uid
+        WHERE ma.teacher_id = :uid AND e.archived_at IS NULL
         GROUP BY e.id, e.name, e.created_at, eq.id, eq.question_number
         ORDER BY e.created_at, eq.question_number`,
       { uid },

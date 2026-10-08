@@ -37,6 +37,8 @@ export interface Exam {
   mark_scheme_pdf_url: string | null;
   use_drive_storage: boolean;
   drive_folder_id: string | null;
+  // Set when the exam has been archived: it leaves the lists and marking stops, but nothing is lost
+  archived_at?: string | null;
   created_at: string;
   // Present on the exam list only
   clips_total?: number;
@@ -56,6 +58,19 @@ export interface ClipRegion {
 export interface NameZone extends ClipRegion {}
 
 // A question as listed for the teacher marking it: how many clips it has and how many they still have to finish
+// What deleting an exam would remove, shown in the confirmation box
+export interface ExamDeletePreview {
+  name: string;
+  archived: boolean;
+  questions: number;
+  scripts: number;
+  clips: number;
+  marks: number;
+  drive_files: boolean;
+  // Allowed once the exam is archived, or while it has no marks
+  allowed: boolean;
+}
+
 export interface AssignedQuestion extends ExamQuestion {
   clips_total: number;
   clips_left: number;

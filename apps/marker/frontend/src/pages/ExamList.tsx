@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 import { ListControls, SearchBox, Segmented, SortSelect } from '../components/ListControls';
+import { ExamMenu } from '../components/ExamMenu';
 import { PageHeader } from '../components/PageHeader';
 import { LinkButton, ProgressBar, StatusPill } from '../components/ui';
 import { filterExams, sortExams, type ExamSort, type ExamStatusFilter } from '../lib/listing';
@@ -9,12 +10,13 @@ import { useViewPref } from '../lib/viewPrefs';
 import type { Exam } from '@marker/shared-types';
 
 export function ExamList() {
+  const [view, setView] = useViewPref<{ scope: 'active' | 'archived'; status: ExamStatusFilter; sort: ExamSort }>(
+    'marker.exams.view', { scope: 'active', status: 'all', sort: 'newest' });
   const { data, isLoading, error } = useQuery({
-    queryKey: ['exams'],
-    queryFn: () => api.listExams(),
+    queryKey: view.scope === 'active' ? ['exams'] : ['exams', view.scope],
+    queryFn: () => api.listExams(view.scope),
   });
   const meQ = useQuery({ queryKey: ['auth', 'me'], queryFn: () => api.me() });
-  const [view, setView] = useViewPref<{ status: ExamStatusFilter; sort: ExamSort }>('marker.exams.view', { status: 'all', sort: 'newest' });
   const [query, setQuery] = useState('');
 
   if (isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
@@ -33,16 +35,23 @@ export function ExamList() {
         actions={<LinkButton to="/exams/new" variant="primary">New exam</LinkButton>}
       />
 
-      {all.length === 0 ? (
+      {all.length === 0 && view.scope === 'active' ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-12 text-center">
           <p className="text-slate-500">No exams yet.</p>
           <div className="mt-4 flex justify-center">
             <LinkButton to="/exams/new" variant="primary">Create your first exam</LinkButton>
           </div>
+          <button type="button" onClick={() => setView({ scope: 'archived' })} className="mt-4 text-sm text-slate-500 underline">Show archived exams</button>
         </div>
       ) : (
         <>
           <ListControls>
+            <Segmented
+              label="Which exams"
+              value={view.scope}
+              options={[['active', 'Active'], ['archived', 'Archived']]}
+              onChange={(scope) => setView({ scope })}
+            />
             <SearchBox value={query} onChange={setQuery} placeholder="Search exams" />
             <Segmented
               label="Show"
@@ -59,8 +68,8 @@ export function ExamList() {
 
           {exams.length === 0 ? (
             <p className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
-              No exams match.{' '}
-              <button type="button" onClick={() => { setQuery(''); setView({ status: 'all' }); }} className="font-medium text-indigo-600 underline">
+              {all.length === 0 ? 'No archived exams.' : 'No exams match.'}{' '}
+              <button type="button" onClick={() => { setQuery(''); setView({ status: 'all', scope: 'active' }); }} className="font-medium text-indigo-600 underline">
                 Clear the filters
               </button>
             </p>
@@ -68,7 +77,8 @@ export function ExamList() {
             <ul className="space-y-3">
               {exams.map((exam: Exam) => {
                 const isLead = Boolean(me && (me.role === 'admin' || exam.lead_teacher_id === me.id));
-                const inSetup = exam.status === 'setup' || exam.status === 'clipping';
+                const archived = Boolean(exam.archived_at);
+                const inSetup = !archived && (exam.status === 'setup' || exam.status === 'clipping');
                 const total = exam.clips_total ?? 0;
                 const marked = exam.clips_marked ?? 0;
                 return (
@@ -80,6 +90,7 @@ export function ExamList() {
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <h2 className="font-medium text-slate-800">{exam.name}</h2>
                         <StatusPill status={exam.status} />
+                        {archived && <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">Archived</span>}
                       </div>
                       <div className="mt-0.5 text-xs text-slate-500">
                         {[exam.subject, exam.year_group, exam.exam_board, exam.exam_series].filter(Boolean).join(' · ')}
@@ -98,7 +109,8 @@ export function ExamList() {
                         <LinkButton to={`/exams/${exam.id}`} variant="primary">Open</LinkButton>
                       )}
                       {isLead && inSetup && <LinkButton to={`/exams/${exam.id}`} variant="secondary">Progress</LinkButton>}
-                      {isLead && !inSetup && <LinkButton to={`/exams/${exam.id}/setup`} variant="secondary">Setup</LinkButton>}
+                      {isLead && !inSetup && !archived && <LinkButton to={`/exams/${exam.id}/setup`} variant="secondary">Setup</LinkButton>}
+                      {isLead && <ExamMenu exam={exam} />}
                     </div>
                   </li>
                 );

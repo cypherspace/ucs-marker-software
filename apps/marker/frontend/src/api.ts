@@ -1,5 +1,5 @@
 import type {
-  ApiSuccess, AssignedQuestion, AuthMe, Exam, ExamQuestion, StudentScript, ScriptClip,
+  ApiSuccess, AssignedQuestion, AuthMe, Exam, ExamDeletePreview, ExamQuestion, StudentScript, ScriptClip,
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
@@ -44,7 +44,17 @@ export const api = {
   home: () => http<ApiSuccess<HomeSummary>>(`${A}/home`),
 
   // Exams
-  listExams: () => http<ApiSuccess<Exam[]>>(`${A}/`),
+  listExams: (which: 'active' | 'archived' | 'all' = 'active') =>
+    http<ApiSuccess<Exam[]>>(which === 'active' ? `${A}/` : `${A}/?archived=${which}`),
+  archiveExam: (id: string) => http<ApiSuccess<Exam>>(`${A}/${id}/archive`, { method: 'POST' }),
+  restoreExam: (id: string) => http<ApiSuccess<Exam>>(`${A}/${id}/restore`, { method: 'POST' }),
+  deletePreview: (id: string) => http<ApiSuccess<ExamDeletePreview>>(`${A}/${id}/delete-preview`),
+  deleteExam: (id: string, name: string) =>
+    http<ApiSuccess<{ deleted: boolean; drive_files_left: boolean }>>(`${A}/${id}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
   getExam: (id: string) => http<ApiSuccess<Exam>>(`${A}/${id}`),
   createExam: (body: Partial<Exam>) =>
     http<ApiSuccess<Exam>>(`${A}/`, {

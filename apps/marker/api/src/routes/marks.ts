@@ -169,6 +169,11 @@ router.post('/marks', requireAuth, async (req, res, next) => {
     const clip = await requireClipAccess(req, res, body.clip_id);
     if (!clip) return;
 
+    const exam = await db('exams').where({ id: clip.exam_id }).first<{ archived_at: string | null }>('archived_at');
+    if (exam?.archived_at) {
+      res.status(409).json({ error: 'This exam is archived, so marks cannot be changed. Restore it first.', code: 'EXAM_ARCHIVED' }); return;
+    }
+
     if (body.marks_awarded != null && body.marks_awarded > clip.max_marks) {
       res.status(422).json({ error: `Marks exceed max (${clip.max_marks})`, code: 'MARKS_EXCEED_MAX' }); return;
     }
@@ -224,6 +229,7 @@ router.get('/my-exams', requireAuth, async (req, res, next) => {
     const exams = await db('exams as e')
       .join('marking_assignments as ma', 'ma.exam_id', 'e.id')
       .where('ma.teacher_id', teacherId)
+      .whereNull('e.archived_at')
       .distinct('e.*')
       .orderBy('e.created_at', 'desc');
     // For each exam, list the questions this teacher is assigned to
