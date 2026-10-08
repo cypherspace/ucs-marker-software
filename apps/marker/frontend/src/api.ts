@@ -1,5 +1,5 @@
 import type {
-  ApiSuccess, AssignedQuestion, AuthMe, Exam, ExamDeletePreview, ExamQuestion, StudentScript, ScriptClip,
+  ApiSuccess, AssignedQuestion, AuthMe, Exam, ExamDeletePreview, ExamQuestion, ExamResults, StudentScript, ScriptClip,
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
@@ -88,8 +88,10 @@ export const api = {
 
   // Scripts
   listScripts: (examId: string) => http<ApiSuccess<StudentScript[]>>(`${A}/exams/${examId}/scripts`),
-  uploadScripts: async (examId: string, files: File[]) => {
+  // classGroup: the class these scripts belong to (optional); every file in the call is filed under it
+  uploadScripts: async (examId: string, files: File[], classGroup?: string) => {
     const form = new FormData();
+    if (classGroup?.trim()) form.append('class_group', classGroup.trim());
     files.forEach((f) => form.append('scripts', f));
     return http<ApiSuccess<{ id: string; student_number: string }[]>>(`${A}/exams/${examId}/scripts`, {
       method: 'POST',
@@ -252,8 +254,22 @@ export const api = {
       }),
 
   // Export
-  exportResults: (examId: string, includeNames?: boolean) =>
-    http<ApiSuccess<{ driveUrl?: string; csv?: string }>>(`${A}/exams/${examId}/export${includeNames ? '?names=1' : ''}`),
+  exportResults: (examId: string, opts: { names?: boolean; classGroup?: string | null } = {}) => {
+    // classGroup: a class name, null for scripts with no class, undefined for everything
+    const q = new URLSearchParams();
+    if (opts.names) q.set('names', '1');
+    if (opts.classGroup === null) q.set('no_class', '1');
+    else if (opts.classGroup) q.set('class', opts.classGroup);
+    const qs = q.toString();
+    return http<ApiSuccess<{ driveUrl?: string; csv?: string; filename?: string }>>(`${A}/exams/${examId}/export${qs ? `?${qs}` : ''}`);
+  },
+  getResults: (examId: string, classGroup?: string | null) => {
+    const q = new URLSearchParams();
+    if (classGroup === null) q.set('no_class', '1');
+    else if (classGroup) q.set('class', classGroup);
+    const qs = q.toString();
+    return http<ApiSuccess<ExamResults>>(`${A}/exams/${examId}/results${qs ? `?${qs}` : ''}`);
+  },
 
   // AI
   aiStatus: () => http<ApiSuccess<{ configured: boolean; model: string }>>(`${A}/ai/status`),

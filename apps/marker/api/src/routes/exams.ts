@@ -6,6 +6,7 @@ import { createExamFolder } from '../services/drive.js';
 import { recordAudit } from '../services/audit.js';
 import { storage } from '../services/storage.js';
 import { isDriveUri } from '../services/drive.js';
+import { requireExamMember } from '../services/access.js';
 
 const router = Router();
 
@@ -78,6 +79,7 @@ router.get('/', requireAuth, async (req, res, next) => {
 // Get single exam
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireExamMember(req, res, req.params.id))) return;
     const exam = await db('exams').where({ id: req.params.id }).first();
     if (!exam) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
     res.json({ data: exam });
@@ -143,6 +145,7 @@ router.patch('/:id', requireAuth, requireRole(['teacher', 'admin']), async (req,
 // List questions for an exam
 router.get('/:id/questions', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireExamMember(req, res, req.params.id))) return;
     const rows = await db('exam_questions')
       .where({ exam_id: req.params.id })
       .orderBy('question_number');
@@ -323,6 +326,7 @@ router.delete('/:examId/questions/:questionId', requireAuth, requireRole(['teach
 // Get marking assignments for exam
 router.get('/:id/assignments', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireExamMember(req, res, req.params.id))) return;
     const rows = await db('marking_assignments as ma')
       .join('users as u', 'u.id', 'ma.teacher_id')
       .join('exam_questions as eq', 'eq.id', 'ma.question_id')
@@ -373,6 +377,7 @@ router.delete('/:id/assignments', requireAuth, requireRole(['teacher', 'admin'])
 // AI marks are counted separately, and "covered" means any mark counts (human, else AI).
 router.get('/:id/progress', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireExamMember(req, res, req.params.id))) return;
     const questions = (await db.raw(
       `SELECT eq.id AS question_id, eq.question_number, eq.max_marks, eq.marking_mode,
               COUNT(sc.id) AS total_clips,

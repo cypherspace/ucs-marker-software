@@ -10,6 +10,8 @@ import { CreateExam } from './pages/CreateExam';
 import { ExamSetup } from './pages/ExamSetup';
 import { ExamProgress } from './pages/ExamProgress';
 import { ExamPage } from './pages/ExamPage';
+import { ExamResults } from './pages/ExamResults';
+import { ExamUpload } from './pages/ExamUpload';
 import { AiMarkingOverview, ComparativeOverview, MarkingLayout, MyMarking } from './pages/Marking';
 import { MarkingInterface } from './pages/MarkingInterface';
 import { ComparativeMarking } from './pages/ComparativeMarking';
@@ -95,7 +97,9 @@ export function App() {
           <Route path="/exams/new" element={<CreateExam />} />
           <Route path="/exams/:id" element={<ExamPage />}>
             <Route index element={<ExamProgress />} />
+            <Route path="results" element={<ExamResults />} />
             <Route path="setup" element={<ExamSetup />} />
+            <Route path="upload" element={<ExamUpload />} />
           </Route>
           {/* Addresses used before the exam page and Marking area existed */}
           <Route path="/my-exams" element={<Navigate to="/marking" replace />} />

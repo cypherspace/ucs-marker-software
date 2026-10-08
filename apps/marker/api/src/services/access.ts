@@ -66,3 +66,35 @@ export async function requireClipAccess(
   }
   return ctx;
 }
+
+// ── Whole exams ──────────────────────────────────────────────────────────────
+// Who may see an exam at all: an admin, its lead teacher, or a teacher who has been assigned a question
+// on it (or has uploaded scripts to it). Anyone else gets a 403, so exam details, progress and results
+// are not readable just by knowing an exam's id.
+export interface ExamAccess {
+  exam: { id: string; name: string; lead_teacher_id: string; use_drive_storage: boolean; drive_folder_id: string | null; archived_at: string | null };
+  /** Admin or the exam's lead teacher: sees everything and may set the exam up */
+  isLead: boolean;
+  /** Questions this teacher was asked to mark */
+  assignedQuestionIds: string[];
+}
+
+export async function requireExamMember(
+  req: Request, res: Response, examId: string, opts: { leadOnly?: boolean; markerOrLead?: boolean } = {},
+): Promise<ExamAccess | null> {
+  const exam = await db('exams').where({ id: examId })
+    .first<ExamAccess['exam']>('id', 'name', 'lead_teacher_id', 'use_drive_storage', 'drive_folder_id', 'archived_at');
+  if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return null; }
+  const user = req.user!;
+  const isLead = user.role === 'admin' || exam.lead_teacher_id === user.sub;
+  const assigned = isLead ? [] : (await db('marking_assignments').where({ exam_id: examId, teacher_id: user.sub })
+    .select<{ question_id: string }[]>('question_id')).map((r) => r.question_id);
+  let allowed = isLead || assigned.length > 0;
+  // Someone who uploaded a class's scripts may see them even if no question has been assigned to them
+  if (!allowed && !opts.leadOnly && !opts.markerOrLead) {
+    allowed = Boolean(await db('student_scripts').where({ exam_id: examId, uploaded_by: user.sub }).first('id'));
+  }
+  if (opts.leadOnly && !isLead) allowed = false;
+  if (!allowed) { res.status(403).json({ error: 'You do not have access to this exam', code: 'FORBIDDEN' }); return null; }
+  return { exam, isLead, assignedQuestionIds: assigned };
+}

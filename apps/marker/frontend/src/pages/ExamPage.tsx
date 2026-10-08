@@ -13,6 +13,7 @@ export function ExamPage() {
   const navigate = useNavigate();
   const examQ = useQuery({ queryKey: ['exam', id], queryFn: () => api.getExam(id!) });
   const meQ = useQuery({ queryKey: ['auth', 'me'], queryFn: () => api.me() });
+  const assignmentsQ = useQuery({ queryKey: ['assignments', id], queryFn: () => api.listAssignments(id!) });
 
   if (examQ.isLoading || meQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
   const exam = examQ.data?.data;
@@ -23,7 +24,10 @@ export function ExamPage() {
   const isLead = me.role === 'admin' || exam.lead_teacher_id === me.id;
   if (!isLead && loc.pathname.endsWith('/setup')) return <Navigate to={`/exams/${id}`} replace state={loc.state} />;
 
-  const details = [exam.subject, exam.year_group, exam.exam_board, exam.exam_series].filter(Boolean).join(' · ');
+  // A teacher who is not the lead can upload their own class's scripts if they have a question to mark on this exam
+  const canUpload = !isLead && !exam.archived_at && (assignmentsQ.data?.data ?? []).some((a) => a.teacher_id === me.id);
+
+  const details =[exam.subject, exam.year_group, exam.exam_board, exam.exam_series].filter(Boolean).join(' · ');
 
   return (
     <div className="max-w-4xl p-4 sm:p-6">
@@ -49,7 +53,9 @@ export function ExamPage() {
         label={`${exam.name} sections`}
         tabs={[
           { to: `/exams/${id}`, label: 'Progress', end: true },
+          { to: `/exams/${id}/results`, label: 'Results' },
           ...(isLead && !exam.archived_at ? [{ to: `/exams/${id}/setup`, label: 'Setup' }] : []),
+          ...(canUpload ? [{ to: `/exams/${id}/upload`, label: 'Upload scripts' }] : []),
         ]}
       />
       <Outlet context={{ exam, isLead }} />

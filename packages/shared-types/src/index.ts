@@ -96,9 +96,9 @@ export type MarkingMode = 'marks' | 'comparative';
 export interface StudentScript {
   id: string;
   exam_id: string;
-  student_id: string | null;
   student_number: string;
-  original_pdf_url: string;
+  // The class this script was uploaded under, if one was given
+  class_group: string | null;
   uploaded_at: string;
 }
 
@@ -424,4 +424,48 @@ export interface Ranking {
   ranked: RankedClip[];
   judged_pairs: number;
   total_pairs: number;
+}
+
+// ─── Results ──────────────────────────────────────────────────────────────────
+export interface ResultsQuestion {
+  id: string;
+  question_number: string;
+  max_marks: number;
+  marking_mode: MarkingMode;
+}
+
+// The mark that counts for one answer (a teacher's, else the AI's), and the AI's own mark beside it
+export interface ResultsCell {
+  marks: number | null;
+  source: MarkSource | null;
+  ai_marks: number | null;
+}
+
+export interface ResultsRow {
+  script_id: string;
+  student_number: string;
+  class_group: string | null;
+  // Only the answers this person may see
+  cells: Record<string, ResultsCell>;
+  // Marks and the possible marks across the answers marked so far
+  total: number;
+  possible: number;
+}
+
+export interface ResultsQuestionStats {
+  question_id: string;
+  scripts: number;
+  marked: number;
+  mean: number | null;
+  min: number | null;
+  max: number | null;
+}
+
+export interface ExamResults {
+  // 'all' for the lead teacher and admins; 'limited' for teachers who see their own classes and questions
+  scope: 'all' | 'limited';
+  classes: { name: string | null; scripts: number }[];
+  questions: ResultsQuestion[];
+  rows: ResultsRow[];
+  stats: ResultsQuestionStats[];
 }

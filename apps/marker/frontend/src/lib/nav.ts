@@ -21,6 +21,8 @@ export function pathLabel(path: string): string {
   if (p === '/marking/comparative') return 'Comparative ranking';
   if (p === '/admin') return 'Admin';
   if (/^\/exams\/[^/]+\/setup$/.test(p)) return 'Setup';
+  if (/^\/exams\/[^/]+\/results$/.test(p)) return 'Results';
+  if (/^\/exams\/[^/]+\/upload$/.test(p)) return 'Upload scripts';
   if (/^\/exams\/[^/]+(\/progress)?$/.test(p)) return 'Exam';
   if (/^\/compare\/[^/]+\/[^/]+\/ranking$/.test(p)) return 'Ranking';
   if (/^\/compare\//.test(p)) return 'Comparisons';
