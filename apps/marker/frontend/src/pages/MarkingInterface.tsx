@@ -3,10 +3,16 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useBackTarget } from '../lib/nav';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
-import { AnnotationCanvas, markTickTotal } from '../components/AnnotationCanvas';
+import { AnnotationCanvas } from '../components/AnnotationCanvas';
+import { AnnotationToolbar, COLORS, type Tool } from '../components/AnnotationToolbar';
+import { DockablePanel } from '../components/DockablePanel';
 import { ScriptClipEditor } from '../components/ScriptClipEditor';
 import { Button } from '../components/ui';
-import type { AnnotationData, QueueClip } from '@marker/shared-types';
+import { ZoomableImage } from '../components/ZoomableImage';
+import { ZoomControls } from '../components/ZoomControls';
+import { useZoom } from '../hooks/useZoom';
+import { markTickTotal, nextNumber } from '../lib/annotations';
+import type { Annotation, AnnotationData, QueueClip } from '@marker/shared-types';
 
 // Loads one clip (the one in the URL, else the first this teacher hasn't finished).
 // The panel below is keyed by clip id, so ticks and typed marks can never carry over to another script.
@@ -89,6 +95,9 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   const [showAi, setShowAi] = useState(false);
   const [showOcr, setShowOcr] = useState(false);
   const [ocrText, setOcrText] = useState<string | null>(null);
+  const [tool, setTool] = useState<Tool>('mark_tick');
+  const [color, setColor] = useState(COLORS[0]);
+  const scriptZoom = useZoom('marker.zoom.script');
 
   const ticks = markTickTotal(annotations);
   const marks = typed ?? (ticks > 0 ? String(ticks) : '');
@@ -122,7 +131,12 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     onSuccess: (r) => setOcrText(r.data.ocr_text),
   });
 
-  const handleAnnotationChange = useCallback((data: AnnotationData) => setAnnotations(data), []);
+  const addAnnotation = useCallback(
+    (a: Annotation) => setAnnotations((d) => ({ annotations: [...d.annotations, a] })), []);
+  const removeAnnotation = useCallback(
+    (id: string) => setAnnotations((d) => ({ annotations: d.annotations.filter((a) => a.id !== id) })), []);
+  const undoAnnotation = useCallback(
+    () => setAnnotations((d) => ({ annotations: d.annotations.slice(0, -1) })), []);
 
   // Warn before closing the tab with unsaved ticks
   useEffect(() => {
@@ -162,9 +176,9 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
         <button onClick={async () => { if (dirty) { try { await saveMutation.mutateAsync(true); } catch { return; } } navigate(backTarget.to, { state: backTarget.state }); }}
           className="text-sm font-medium text-indigo-600 hover:underline">← Back to {backTarget.label}</button>
-        <div className="font-medium text-slate-700">
-          Question {question.question_number} — max {maxMarks} marks
-        </div>
+        <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700" title={`Question ${question.question_number}`}>
+          Q{question.question_number}
+        </span>
 
         <div className="flex items-center gap-1 text-sm">
           <Button className="!px-2.5" disabled={!clip.prev_id || saveMutation.isPending} onClick={() => void leaveTo(clip.prev_id)} aria-label="Previous script">‹ Prev</Button>
@@ -187,8 +201,8 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
         </div>
 
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-xs text-slate-500" aria-live="polite">{statusText}</span>
           <span className="text-sm text-slate-500">{clip.remaining} to mark</span>
+          <ZoomControls zoom={scriptZoom.zoom} onZoomIn={scriptZoom.zoomIn} onZoomOut={scriptZoom.zoomOut} onFit={scriptZoom.fit} label="Script zoom" />
           <button
             onClick={() => {
               const next = !showOcr;
@@ -211,7 +225,10 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
           )}
           <button
             onClick={() => setShowMs((v) => !v)}
-            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${showMs ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            disabled={!clip.ms_url}
+            title={clip.ms_url ? 'Show or hide the mark scheme. Drag its title bar to move it.' : 'No mark scheme has been clipped for this question'}
+            aria-pressed={showMs}
+            className={`rounded px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${showMs ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
           >
             {showMs ? 'Hide MS' : 'Show MS'}
           </button>
@@ -231,123 +248,127 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
         </div>
       )}
 
-      {/* Main content */}
-      <div className="flex min-h-0 flex-1 gap-4 p-4">
-        {/* Annotation area: the tools stay in view, the script scrolls inside its own pane */}
-        <div className="min-h-0 min-w-0 flex-1">
+      {/* Main content: the script with its tools; the mark scheme docks around it */}
+      <DockablePanel
+        title="Mark scheme"
+        storageKey="marker.panel.ms"
+        open={showMs && Boolean(clip.ms_url)}
+        onClose={() => setShowMs(false)}
+        panel={clip.ms_url ? <ZoomableImage src={clip.ms_url} alt="Mark scheme" storageKey="marker.zoom.ms" /> : null}
+      >
+        <div className="flex h-full min-h-0 gap-4 p-4">
+          <AnnotationToolbar
+            tool={tool}
+            onTool={setTool}
+            color={color}
+            onColor={setColor}
+            canUndo={annotations.annotations.length > 0}
+            onUndo={undoAnnotation}
+            top={
+              <>
+                <div>
+                  <label htmlFor="marks" className="block text-xs font-medium uppercase tracking-wide text-slate-500">Mark</label>
+                  <input
+                    id="marks"
+                    type="number"
+                    min={0}
+                    max={maxMarks}
+                    step={1}
+                    value={marks}
+                    onChange={(e) => setTyped(e.target.value === String(ticks) && ticks > 0 ? null : e.target.value)}
+                    className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-center text-lg font-semibold focus:border-indigo-500 focus:outline-none"
+                  />
+                  {overriding && (
+                    <p className="mt-1 text-[11px] leading-tight text-slate-500">
+                      Typed mark in use.{' '}
+                      <button type="button" onClick={() => setTyped(null)} className="font-medium text-indigo-600 underline">Use tick total ({ticks})</button>
+                    </p>
+                  )}
+                  {marks !== '' && !marksValid && (
+                    <p role="alert" className="mt-1 text-xs text-red-600">Enter a whole number from 0 to {maxMarks}.</p>
+                  )}
+                </div>
+                <Button
+                  className="w-full"
+                  disabled={!marksValid || saveMutation.isPending || (!dirty && clip.state === 'marked')}
+                  onClick={() => saveMutation.mutate(false, { onSuccess: refetch })}
+                >
+                  Save
+                </Button>
+                <Button variant="primary" className="w-full" disabled={!marksValid || saveMutation.isPending} onClick={() => void saveAndNext()}>
+                  {saveMutation.isPending ? 'Saving…' : 'Save & Next →'}
+                </Button>
+                <p className="min-h-4 text-center text-xs text-slate-500" aria-live="polite">{statusText}</p>
+                {saveMutation.error && (
+                  <p role="alert" className="text-xs text-red-600">{(saveMutation.error as Error).message}</p>
+                )}
+              </>
+            }
+          />
+
           <AnnotationCanvas
             key={`${clip.id}-${clip.reclipped_at ?? ''}`}
-            clipUrl={clip.clip_url}
-            initialData={annotations}
-            onChange={handleAnnotationChange}
+            imageUrl={clip.clip_url}
+            annotations={annotations.annotations}
+            tool={tool}
+            color={color}
+            zoom={scriptZoom.zoom}
+            onZoom={scriptZoom.setZoom}
+            onTool={setTool}
+            onAdd={addAnnotation}
+            onRemove={removeAnnotation}
+            nextNumber={() => nextNumber(annotations.annotations)}
+            markTickCount={ticks}
             maxMarkTicks={maxMarks}
           />
-        </div>
 
-        {/* Side panels */}
-        {((showMs && clip.ms_url) || showAi || showOcr) && (
-          <div className="min-h-0 w-80 flex-shrink-0 space-y-3 overflow-y-auto">
-            {showMs && clip.ms_url && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2">
-                <div className="mb-1 text-xs font-medium text-amber-700 uppercase tracking-wide">Mark Scheme</div>
-                <img src={clip.ms_url} alt="Mark scheme" className="w-full rounded" />
-              </div>
-            )}
-            {showAi && clip.ai_mark && (
-              <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-950">
-                <div className="mb-1 text-xs font-medium text-violet-700 uppercase tracking-wide">AI suggestion</div>
-                {clip.ai_mark.marks_awarded !== null ? (
-                  <p className="text-lg font-semibold">{clip.ai_mark.marks_awarded} <span className="text-sm font-normal text-violet-700">/ {maxMarks}</span></p>
-                ) : (
-                  <p className="text-violet-700">No mark suggested (feedback only).</p>
-                )}
-                {clip.ai_mark.reasoning && <p className="mt-2"><span className="font-medium">Reasoning:</span> {clip.ai_mark.reasoning}</p>}
-                {clip.ai_mark.feedback && <p className="mt-2"><span className="font-medium">Feedback:</span> {clip.ai_mark.feedback}</p>}
-                {clip.ai_mark.marks_awarded !== null && (
-                  <button
-                    onClick={() => setTyped(String(clip.ai_mark!.marks_awarded))}
-                    className="mt-3 rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700"
-                  >
-                    Use this mark
-                  </button>
-                )}
-                <p className="mt-2 text-xs text-violet-700">Only the mark you save counts.</p>
-              </div>
-            )}
-            {showOcr && (
-              <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
-                <div className="mb-1 text-xs font-medium text-sky-700 uppercase tracking-wide">Typed text (automatic, may contain mistakes)</div>
-                {ocrMutation.isPending ? (
-                  <p className="text-sky-700">Reading the handwriting…</p>
-                ) : ocrMutation.error ? (
-                  <div role="alert" className="text-red-700">
-                    {ocrMutation.error instanceof HttpError && ocrMutation.error.code === 'AI_NOT_CONFIGURED'
-                      ? 'Text recognition isn\'t set up on this server.'
-                      : (ocrMutation.error as Error).message}
-                    <button onClick={() => ocrMutation.mutate(false)} className="ml-2 underline">Try again</button>
-                  </div>
-                ) : (ocrText ?? clip.ocr_text) !== null ? (
-                  <>
-                    <pre className="whitespace-pre-wrap font-sans">{(ocrText ?? clip.ocr_text) || '(nothing readable)'}</pre>
-                    <button onClick={() => ocrMutation.mutate(true)} className="mt-2 text-xs text-sky-700 underline">Read again</button>
-                  </>
-                ) : null}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Mark entry footer */}
-      <div className="flex flex-wrap items-center gap-4 border-t border-slate-200 bg-white px-4 py-3">
-        <div className="flex items-center gap-2">
-          <label htmlFor="marks" className="text-sm font-medium text-slate-700">Marks:</label>
-          <input
-            id="marks"
-            type="number"
-            min={0}
-            max={maxMarks}
-            step={1}
-            value={marks}
-            onChange={(e) => setTyped(e.target.value === String(ticks) && ticks > 0 ? null : e.target.value)}
-            className="w-20 rounded border border-slate-300 px-2 py-1.5 text-center text-sm font-medium focus:border-indigo-500 focus:outline-none"
-            placeholder={`0–${maxMarks}`}
-          />
-          <span className="text-sm text-slate-400">/ {maxMarks}</span>
-        </div>
-
-        <span className="text-xs text-slate-500">
-          {ticks > 0
-            ? `${ticks} mark tick${ticks === 1 ? '' : 's'}`
-            : 'Place mark ticks on the answer, or type a mark'}
-          {overriding && (
-            <>
-              {' · '}typed mark in use{' '}
-              <button onClick={() => setTyped(null)} className="font-medium text-indigo-600 underline">use tick total ({ticks})</button>
-            </>
+          {(showAi || showOcr) && (
+            <div className="min-h-0 w-72 flex-shrink-0 space-y-3 overflow-y-auto">
+              {showAi && clip.ai_mark && (
+                <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-950">
+                  <div className="mb-1 text-xs font-medium text-violet-700 uppercase tracking-wide">AI suggestion</div>
+                  {clip.ai_mark.marks_awarded !== null ? (
+                    <p className="text-lg font-semibold">{clip.ai_mark.marks_awarded} <span className="text-sm font-normal text-violet-700">/ {maxMarks}</span></p>
+                  ) : (
+                    <p className="text-violet-700">No mark suggested (feedback only).</p>
+                  )}
+                  {clip.ai_mark.reasoning && <p className="mt-2"><span className="font-medium">Reasoning:</span> {clip.ai_mark.reasoning}</p>}
+                  {clip.ai_mark.feedback && <p className="mt-2"><span className="font-medium">Feedback:</span> {clip.ai_mark.feedback}</p>}
+                  {clip.ai_mark.marks_awarded !== null && (
+                    <button
+                      onClick={() => setTyped(String(clip.ai_mark!.marks_awarded))}
+                      className="mt-3 rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700"
+                    >
+                      Use this mark
+                    </button>
+                  )}
+                  <p className="mt-2 text-xs text-violet-700">Only the mark you save counts.</p>
+                </div>
+              )}
+              {showOcr && (
+                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
+                  <div className="mb-1 text-xs font-medium text-sky-700 uppercase tracking-wide">Typed text (automatic, may contain mistakes)</div>
+                  {ocrMutation.isPending ? (
+                    <p className="text-sky-700">Reading the handwriting…</p>
+                  ) : ocrMutation.error ? (
+                    <div role="alert" className="text-red-700">
+                      {ocrMutation.error instanceof HttpError && ocrMutation.error.code === 'AI_NOT_CONFIGURED'
+                        ? 'Text recognition isn\'t set up on this server.'
+                        : (ocrMutation.error as Error).message}
+                      <button onClick={() => ocrMutation.mutate(false)} className="ml-2 underline">Try again</button>
+                    </div>
+                  ) : (ocrText ?? clip.ocr_text) !== null ? (
+                    <>
+                      <pre className="whitespace-pre-wrap font-sans">{(ocrText ?? clip.ocr_text) || '(nothing readable)'}</pre>
+                      <button onClick={() => ocrMutation.mutate(true)} className="mt-2 text-xs text-sky-700 underline">Read again</button>
+                    </>
+                  ) : null}
+                </div>
+              )}
+            </div>
           )}
-        </span>
-
-        {marks !== '' && !marksValid && (
-          <span role="alert" className="text-sm text-red-600">Enter a whole number from 0 to {maxMarks}.</span>
-        )}
-        {saveMutation.error && (
-          <span role="alert" className="text-sm text-red-600">{(saveMutation.error as Error).message}</span>
-        )}
-
-        <div className="ml-auto flex gap-2">
-          <Button
-            disabled={!marksValid || saveMutation.isPending || (!dirty && clip.state === 'marked')}
-            onClick={() => saveMutation.mutate(false, { onSuccess: refetch })}
-          >
-            Save
-          </Button>
-          <Button variant="primary" disabled={!marksValid || saveMutation.isPending} onClick={() => void saveAndNext()}>
-            {saveMutation.isPending ? 'Saving…' : 'Save & Next →'}
-          </Button>
         </div>
-      </div>
-
+      </DockablePanel>
       {showPages && (
         <ScriptClipEditor
           scriptId={clip.script_id}
