@@ -8,6 +8,7 @@ import { extractorFetch, describeExtractorFailure } from '../services/extractor.
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireQuestionAccess } from '../services/access.js';
 import { recordAudit } from '../services/audit.js';
+import { stripTextLayer } from '../services/converted.js';
 
 // Per-script clips: a script with a different layout (typed, scribed, pages missing)
 // can have its own regions for one question, instead of the question's standard ones.
@@ -157,12 +158,15 @@ router.put('/scripts/:scriptId/questions/:questionId/clip', requireAuth, async (
       reclipped_at: db.fn.now(),
       reclipped_by: req.user!.sub,
       ocr_text: null,
+      text_image_url: null,
     };
     const [clip] = await db('script_clips')
       .insert({ script_id: script.id, question_id: questionId, ...values })
       .onConflict(['script_id', 'question_id'])
       .merge(values)
       .returning(['id']);
+    // Ticks placed on the old converted page no longer line up with anything
+    await stripTextLayer([clip.id as string]);
 
     const hadMarks = existing
       ? await db('script_marks').where({ clip_id: existing.id, mark_source: 'human' }).first('id')
@@ -205,7 +209,9 @@ router.delete('/scripts/:scriptId/questions/:questionId/clip', requireAuth, asyn
       reclipped_at: db.fn.now(),
       reclipped_by: req.user!.sub,
       ocr_text: null,
+      text_image_url: null,
     });
+    await stripTextLayer([existing.id]);
     await recordAudit(req, 'clip.reset', 'script_clip', existing.id, { script_id: script.id, question_id: questionId });
     res.json({ data: { clip_id: existing.id, clip_source: 'auto' } });
   } catch (err) {

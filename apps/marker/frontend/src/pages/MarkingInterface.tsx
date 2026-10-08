@@ -80,7 +80,11 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   const question = clip.question;
   const maxMarks = question.max_marks;
 
-  const initialAnnotations: AnnotationData = clip.my_mark?.annotation_data ?? { annotations: [] };
+  // Ticks placed on a converted page that has since been discarded have nothing to sit on, so they are dropped
+  const savedAnnotations: AnnotationData = clip.my_mark?.annotation_data ?? { annotations: [] };
+  const initialAnnotations: AnnotationData = clip.converted_url
+    ? savedAnnotations
+    : { annotations: savedAnnotations.annotations.filter((a) => a.layer !== 'text') };
   const initialTicks = markTickTotal(initialAnnotations);
   // `typed` is null while the Marks box simply follows the Mark ticks; typing a different number overrides them.
   const initialTyped = clip.my_mark?.marks_awarded == null
@@ -93,11 +97,17 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   const [showMs, setShowMs] = useState(false);
   const [showPages, setShowPages] = useState(false);
   const [showAi, setShowAi] = useState(false);
-  const [showOcr, setShowOcr] = useState(false);
-  const [ocrText, setOcrText] = useState<string | null>(null);
+  // The converted-handwriting page (a saved picture of the transcription), once made
+  const [convertedUrl, setConvertedUrl] = useState<string | null>(clip.converted_url);
+  const [view, setView] = useState<'script' | 'converted'>('script');
   const [tool, setTool] = useState<Tool>('mark_tick');
   const [color, setColor] = useState(COLORS[0]);
   const scriptZoom = useZoom('marker.zoom.script');
+  const convertedZoom = useZoom('marker.zoom.converted');
+  const zoomState = view === 'converted' ? convertedZoom : scriptZoom;
+  // Each picture has its own set of annotations; ticks on both count towards the same mark
+  const layer = view === 'converted' ? 'text' : 'clip';
+  const onLayer = (a: Annotation) => (a.layer ?? 'clip') === layer;
 
   const ticks = markTickTotal(annotations);
   const marks = typed ?? (ticks > 0 ? String(ticks) : '');
@@ -126,17 +136,45 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     },
   });
 
-  const ocrMutation = useMutation({
+  // Convert the handwriting to text once: the text and its page image are saved on the clip, so asking
+  // again returns them. `refresh` converts afresh and drops ticks made on the old converted page.
+  const convertMutation = useMutation({
     mutationFn: (refresh: boolean) => api.runOcr(clip.id, refresh),
-    onSuccess: (r) => setOcrText(r.data.ocr_text),
+    onSuccess: (r, refresh) => {
+      setConvertedUrl(r.data.converted_url);
+      if (refresh) setAnnotations((d) => ({ annotations: d.annotations.filter((a) => a.layer !== 'text') }));
+      setView('converted');
+    },
   });
+
+  function convertAgain() {
+    if (window.confirm(
+      'Convert this handwriting again?\n\nThe text is read afresh, and any ticks or notes you placed on the '
+      + 'converted page are removed (including mark ticks, so check the mark afterwards). '
+      + 'Your marks on the original script are kept.',
+    )) convertMutation.mutate(true);
+  }
 
   const addAnnotation = useCallback(
     (a: Annotation) => setAnnotations((d) => ({ annotations: [...d.annotations, a] })), []);
   const removeAnnotation = useCallback(
     (id: string) => setAnnotations((d) => ({ annotations: d.annotations.filter((a) => a.id !== id) })), []);
-  const undoAnnotation = useCallback(
-    () => setAnnotations((d) => ({ annotations: d.annotations.slice(0, -1) })), []);
+  // Undo takes back the last annotation on the picture you are looking at
+  const undoAnnotation = () => setAnnotations((d) => {
+    const i = d.annotations.map(onLayer).lastIndexOf(true);
+    return i < 0 ? d : { annotations: d.annotations.filter((_, j) => j !== i) };
+  });
+
+  // Esc leaves the converted view
+  useEffect(() => {
+    if (view !== 'converted') return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key === 'Escape' && !(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'))) setView('script');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [view]);
 
   // Warn before closing the tab with unsaved ticks
   useEffect(() => {
@@ -202,18 +240,29 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
 
         <div className="ml-auto flex items-center gap-3">
           <span className="text-sm text-slate-500">{clip.remaining} to mark</span>
-          <ZoomControls zoom={scriptZoom.zoom} onZoomIn={scriptZoom.zoomIn} onZoomOut={scriptZoom.zoomOut} onFit={scriptZoom.fit} label="Script zoom" />
-          <button
-            onClick={() => {
-              const next = !showOcr;
-              setShowOcr(next);
-              if (next && ocrText === null && clip.ocr_text === null && !ocrMutation.isPending) ocrMutation.mutate(false);
-            }}
-            aria-pressed={showOcr}
-            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${showOcr ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-          >
-            {showOcr ? 'Hide typed text' : 'Typed text'}
-          </button>
+          <ZoomControls
+            zoom={zoomState.zoom} onZoomIn={zoomState.zoomIn} onZoomOut={zoomState.zoomOut} onFit={zoomState.fit}
+            label={view === 'converted' ? 'Converted page zoom' : 'Script zoom'}
+          />
+          {convertedUrl ? (
+            <button
+              onClick={() => setView((v) => (v === 'converted' ? 'script' : 'converted'))}
+              aria-pressed={view === 'converted'}
+              title="The handwriting as typed text, saved so it is only converted once. You can mark it just like the script."
+              className={`rounded px-3 py-1 text-xs font-medium transition-colors ${view === 'converted' ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            >
+              {view === 'converted' ? 'Back to script' : 'See converted handwriting'}
+            </button>
+          ) : (
+            <button
+              onClick={() => convertMutation.mutate(false)}
+              disabled={convertMutation.isPending}
+              title="Read the handwriting and show it as typed text you can mark. Done once, then saved."
+              className="rounded bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-200 disabled:opacity-60"
+            >
+              {convertMutation.isPending ? 'Converting…' : 'Convert handwriting to text'}
+            </button>
+          )}
           {clip.ai_mark && (
             <button
               onClick={() => setShowAi((v) => !v)}
@@ -242,6 +291,15 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
         </div>
       </div>
 
+      {convertMutation.error && (
+        <div role="alert" className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          {convertMutation.error instanceof HttpError && convertMutation.error.code === 'AI_NOT_CONFIGURED'
+            ? 'Text recognition isn\'t set up on this server.'
+            : (convertMutation.error as Error).message}
+          <button onClick={() => convertMutation.mutate(convertMutation.variables ?? false)} className="ml-3 font-medium underline">Try again</button>
+        </div>
+      )}
+
       {clip.changed_after_marking && (
         <div role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
           The pages for this answer were changed after it was first marked, so earlier marks may refer to the old selection.
@@ -262,7 +320,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
             onTool={setTool}
             color={color}
             onColor={setColor}
-            canUndo={annotations.annotations.length > 0}
+            canUndo={annotations.annotations.some(onLayer)}
             onUndo={undoAnnotation}
             top={
               <>
@@ -306,65 +364,76 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
             }
           />
 
-          <AnnotationCanvas
-            key={`${clip.id}-${clip.reclipped_at ?? ''}`}
-            imageUrl={clip.clip_url}
-            annotations={annotations.annotations}
-            tool={tool}
-            color={color}
-            zoom={scriptZoom.zoom}
-            onZoom={scriptZoom.setZoom}
-            onTool={setTool}
-            onAdd={addAnnotation}
-            onRemove={removeAnnotation}
-            nextNumber={() => nextNumber(annotations.annotations)}
-            markTickCount={ticks}
-            maxMarkTicks={maxMarks}
-          />
+          {view === 'converted' && convertedUrl ? (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm text-sky-900">
+                <span className="font-medium">Converted handwriting</span>
+                <span className="text-xs text-sky-700">Automatic, may contain mistakes. Ticks placed here count towards the same mark.</span>
+                <button type="button" onClick={() => setView('script')} className="ml-auto text-xs font-medium underline">Back to script (Esc)</button>
+                <button
+                  type="button"
+                  onClick={convertAgain}
+                  disabled={convertMutation.isPending}
+                  className="text-xs text-sky-700 underline disabled:opacity-60"
+                >
+                  {convertMutation.isPending ? 'Converting…' : 'Convert again'}
+                </button>
+              </div>
+              <AnnotationCanvas
+                key={convertedUrl}
+                imageUrl={convertedUrl}
+                annotations={annotations.annotations.filter((a) => a.layer === 'text')}
+                tool={tool}
+                color={color}
+                zoom={convertedZoom.zoom}
+                onZoom={convertedZoom.setZoom}
+                onTool={setTool}
+                onAdd={(a) => addAnnotation({ ...a, layer: 'text' })}
+                onRemove={removeAnnotation}
+                nextNumber={() => nextNumber(annotations.annotations)}
+                markTickCount={ticks}
+                maxMarkTicks={maxMarks}
+              />
+            </div>
+          ) : (
+            <AnnotationCanvas
+              key={`${clip.id}-${clip.reclipped_at ?? ''}`}
+              imageUrl={clip.clip_url}
+              annotations={annotations.annotations.filter((a) => (a.layer ?? 'clip') === 'clip')}
+              tool={tool}
+              color={color}
+              zoom={scriptZoom.zoom}
+              onZoom={scriptZoom.setZoom}
+              onTool={setTool}
+              onAdd={addAnnotation}
+              onRemove={removeAnnotation}
+              nextNumber={() => nextNumber(annotations.annotations)}
+              markTickCount={ticks}
+              maxMarkTicks={maxMarks}
+            />
+          )}
 
-          {(showAi || showOcr) && (
+          {showAi && clip.ai_mark && (
             <div className="min-h-0 w-72 flex-shrink-0 space-y-3 overflow-y-auto">
-              {showAi && clip.ai_mark && (
-                <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-950">
-                  <div className="mb-1 text-xs font-medium text-violet-700 uppercase tracking-wide">AI suggestion</div>
-                  {clip.ai_mark.marks_awarded !== null ? (
-                    <p className="text-lg font-semibold">{clip.ai_mark.marks_awarded} <span className="text-sm font-normal text-violet-700">/ {maxMarks}</span></p>
-                  ) : (
-                    <p className="text-violet-700">No mark suggested (feedback only).</p>
-                  )}
-                  {clip.ai_mark.reasoning && <p className="mt-2"><span className="font-medium">Reasoning:</span> {clip.ai_mark.reasoning}</p>}
-                  {clip.ai_mark.feedback && <p className="mt-2"><span className="font-medium">Feedback:</span> {clip.ai_mark.feedback}</p>}
-                  {clip.ai_mark.marks_awarded !== null && (
-                    <button
-                      onClick={() => setTyped(String(clip.ai_mark!.marks_awarded))}
-                      className="mt-3 rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700"
-                    >
-                      Use this mark
-                    </button>
-                  )}
-                  <p className="mt-2 text-xs text-violet-700">Only the mark you save counts.</p>
-                </div>
-              )}
-              {showOcr && (
-                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
-                  <div className="mb-1 text-xs font-medium text-sky-700 uppercase tracking-wide">Typed text (automatic, may contain mistakes)</div>
-                  {ocrMutation.isPending ? (
-                    <p className="text-sky-700">Reading the handwriting…</p>
-                  ) : ocrMutation.error ? (
-                    <div role="alert" className="text-red-700">
-                      {ocrMutation.error instanceof HttpError && ocrMutation.error.code === 'AI_NOT_CONFIGURED'
-                        ? 'Text recognition isn\'t set up on this server.'
-                        : (ocrMutation.error as Error).message}
-                      <button onClick={() => ocrMutation.mutate(false)} className="ml-2 underline">Try again</button>
-                    </div>
-                  ) : (ocrText ?? clip.ocr_text) !== null ? (
-                    <>
-                      <pre className="whitespace-pre-wrap font-sans">{(ocrText ?? clip.ocr_text) || '(nothing readable)'}</pre>
-                      <button onClick={() => ocrMutation.mutate(true)} className="mt-2 text-xs text-sky-700 underline">Read again</button>
-                    </>
-                  ) : null}
-                </div>
-              )}
+              <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-950">
+                <div className="mb-1 text-xs font-medium text-violet-700 uppercase tracking-wide">AI suggestion</div>
+                {clip.ai_mark.marks_awarded !== null ? (
+                  <p className="text-lg font-semibold">{clip.ai_mark.marks_awarded} <span className="text-sm font-normal text-violet-700">/ {maxMarks}</span></p>
+                ) : (
+                  <p className="text-violet-700">No mark suggested (feedback only).</p>
+                )}
+                {clip.ai_mark.reasoning && <p className="mt-2"><span className="font-medium">Reasoning:</span> {clip.ai_mark.reasoning}</p>}
+                {clip.ai_mark.feedback && <p className="mt-2"><span className="font-medium">Feedback:</span> {clip.ai_mark.feedback}</p>}
+                {clip.ai_mark.marks_awarded !== null && (
+                  <button
+                    onClick={() => setTyped(String(clip.ai_mark!.marks_awarded))}
+                    className="mt-3 rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700"
+                  >
+                    Use this mark
+                  </button>
+                )}
+                <p className="mt-2 text-xs text-violet-700">Only the mark you save counts.</p>
+              </div>
             </div>
           )}
         </div>
@@ -380,9 +449,11 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
           onSaved={() => {
             // Ticks were placed on the old crop, so they no longer line up
             setShowPages(false);
+            // (the server has discarded the converted page too: it was made from the old crop)
             setAnnotations({ annotations: [] });
-            setOcrText(null);
-            ocrMutation.reset();
+            setConvertedUrl(null);
+            setView('script');
+            convertMutation.reset();
             refetch();
           }}
         />

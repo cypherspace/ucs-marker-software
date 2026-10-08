@@ -274,7 +274,7 @@ export const api = {
   // AI
   aiStatus: () => http<ApiSuccess<{ configured: boolean; model: string }>>(`${A}/ai/status`),
   runOcr: (clipId: string, refresh = false) =>
-    http<ApiSuccess<{ ocr_text: string; cached: boolean }>>(`${A}/clips/${clipId}/ocr${refresh ? '?refresh=1' : ''}`, { method: 'POST' }),
+    http<ApiSuccess<{ ocr_text: string; converted_url: string; cached: boolean }>>(`${A}/clips/${clipId}/ocr${refresh ? '?refresh=1' : ''}`, { method: 'POST' }),
   aiPlan: (examId: string, settings: AiSettings, scope: { type: AiScopeType; count?: number }) =>
     http<ApiSuccess<AiPlan>>(`${A}/exams/${examId}/ai-mark/plan`, {
       method: 'POST',

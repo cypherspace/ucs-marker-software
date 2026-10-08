@@ -136,9 +136,14 @@ export type AnnotationTool =
   // A tick that is worth one mark: the Marks box is the number of these (unless overridden)
   | 'mark_tick';
 
+// Which picture an annotation sits on: the clipped script image (the default) or the
+// converted-handwriting page. Mark ticks on either layer count towards the same total.
+export type AnnotationLayer = 'clip' | 'text';
+
 export interface Annotation {
   id: string;
   type: AnnotationTool;
+  layer?: AnnotationLayer;
   x: number;
   y: number;
   color: string;
@@ -203,6 +208,8 @@ export interface QueueClip {
   my_mark: { marks_awarded: number | null; annotation_data: AnnotationData | null; status: MarkStatus } | null;
   ai_mark: { marks_awarded: number | null; reasoning: string | null; feedback: string | null; model: string | null } | null;
   ocr_text: string | null;
+  // Same-origin URL of the saved converted-handwriting page, once the clip has been converted
+  converted_url: string | null;
 }
 
 // ─── Comparative marking ─────────────────────────────────────────────────────
