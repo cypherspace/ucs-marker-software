@@ -55,6 +55,12 @@ export interface ClipRegion {
 // Name zones to black out before any AI processing
 export interface NameZone extends ClipRegion {}
 
+// A question as listed for the teacher marking it: how many clips it has and how many they still have to finish
+export interface AssignedQuestion extends ExamQuestion {
+  clips_total: number;
+  clips_left: number;
+}
+
 export interface ExamQuestion {
   id: string;
   exam_id: string;

@@ -234,6 +234,29 @@ router.get('/my-exams', requireAuth, async (req, res, next) => {
         .select('eq.*');
       return { ...exam, assigned_questions: questions };
     }));
+
+    // How many clips each assigned question has, and how many this teacher still has to finish
+    const questionIds = withQuestions.flatMap((e) => e.assigned_questions.map((q: { id: string }) => q.id));
+    const counts = new Map<string, { total: number; left: number }>();
+    if (questionIds.length) {
+      const rows = (await db.raw(
+        `SELECT sc.question_id,
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE NOT EXISTS (
+                  SELECT 1 FROM script_marks sm
+                   WHERE sm.clip_id = sc.id AND sm.marker_id = ? AND sm.mark_source = 'human' AND sm.status <> 'pending')) AS "left"
+           FROM script_clips sc
+          WHERE sc.question_id IN (${questionIds.map(() => '?').join(', ')})
+          GROUP BY sc.question_id`,
+        [teacherId, ...questionIds],
+      )).rows as { question_id: string; total: string; left: string }[];
+      for (const r of rows) counts.set(r.question_id, { total: Number(r.total), left: Number(r.left) });
+    }
+    for (const exam of withQuestions) {
+      exam.assigned_questions = exam.assigned_questions.map((q: { id: string }) => ({
+        ...q, clips_total: counts.get(q.id)?.total ?? 0, clips_left: counts.get(q.id)?.left ?? 0,
+      }));
+    }
     res.json({ data: withQuestions });
   } catch (err) {
     next(err);

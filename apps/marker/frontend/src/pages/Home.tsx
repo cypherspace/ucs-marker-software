@@ -46,7 +46,7 @@ export function Home() {
   }
 
   const me = meQ.data?.data;
-  const { marking, exams, admin, comparative } = homeQ.data.data;
+  const { marking, exams, progress, admin, comparative } = homeQ.data.data;
   const recentExams = (examsQ.data?.data ?? []).slice(0, 3);
   const nothingYet = exams.total === 0 && marking.assigned_questions === 0;
 
@@ -83,10 +83,14 @@ export function Home() {
             marking.next ? (
               <>
                 <LinkButton to={`/mark/${marking.next.exam_id}/${marking.next.question_id}`} variant="primary">Start marking</LinkButton>
-                <LinkButton to="/my-exams" variant="secondary">All my questions</LinkButton>
+                <LinkButton to="/marking" variant="secondary">All my questions</LinkButton>
+                {progress.clips_total > 0 && <LinkButton to="/marking/ai" variant="secondary">AI marking</LinkButton>}
               </>
             ) : (
-              <LinkButton to="/my-exams" variant="secondary">Open marking</LinkButton>
+              <>
+                <LinkButton to="/marking" variant="secondary">Open marking</LinkButton>
+                {progress.clips_total > 0 && <LinkButton to="/marking/ai" variant="secondary">AI marking</LinkButton>}
+              </>
             )
           }
         >
@@ -138,7 +142,7 @@ export function Home() {
                       <span className="min-w-0 flex-1 truncate text-slate-800">{e.name}</span>
                       <StatusPill status={e.status} />
                       <AppLink
-                        to={`/exams/${e.id}/${inSetup ? 'setup' : 'progress'}`}
+                        to={inSetup ? `/exams/${e.id}/setup` : `/exams/${e.id}`}
                         className="font-medium text-indigo-600 hover:underline"
                       >
                         {inSetup ? 'Continue setup' : 'Open'}
@@ -159,7 +163,7 @@ export function Home() {
               comparative.next ? (
                 <LinkButton to={`/compare/${comparative.next.exam_id}/${comparative.next.question_id}`} variant="primary">Judge comparisons</LinkButton>
               ) : (
-                <LinkButton to="/my-exams" variant="secondary">Open marking</LinkButton>
+                <LinkButton to="/marking" variant="secondary">Open marking</LinkButton>
               )
             }
           >

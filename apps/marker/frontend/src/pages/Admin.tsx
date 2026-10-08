@@ -254,7 +254,7 @@ function OverviewTab() {
             <h2 className="font-medium text-slate-800">{e.name}</h2>
             <StatusPill status={e.status} />
             <span className="text-xs text-slate-500">Lead: {e.lead_email ?? 'unknown'}</span>
-            <AppLink to={`/exams/${e.exam_id}/progress`} className="ml-auto text-sm text-indigo-600 hover:underline">Open progress</AppLink>
+            <AppLink to={`/exams/${e.exam_id}`} className="ml-auto text-sm text-indigo-600 hover:underline">Open progress</AppLink>
           </div>
           {e.clips_total > 0 ? (
             <div className="mt-3 max-w-md">

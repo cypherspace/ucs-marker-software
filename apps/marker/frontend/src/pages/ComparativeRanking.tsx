@@ -88,9 +88,9 @@ export function ComparativeRanking() {
         title={`Ranking: ${examQ.data?.data.name ?? ''}`}
         crumbs={[
           { label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' },
-          { label: examQ.data?.data.name ?? 'Exam', to: `/exams/${examId}/progress` }, { label: 'Ranking' },
+          { label: examQ.data?.data.name ?? 'Exam', to: `/exams/${examId}` }, { label: 'Ranking' },
         ]}
-        back={{ to: `/exams/${examId}/progress`, label: 'Progress' }}
+        back={{ to: `/exams/${examId}`, label: 'Progress' }}
         subtitle="Scripts ranked from every comparison made so far. Where a teacher and the AI judged the same pair, the teacher's judgement is used."
       />
 

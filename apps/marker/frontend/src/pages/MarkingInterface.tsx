@@ -20,7 +20,7 @@ export function MarkingInterface() {
   const { examId, questionId, clipId } = useParams<{ examId: string; questionId: string; clipId?: string }>();
   const navigate = useNavigate();
   const loc = useLocation();
-  const backTarget = useBackTarget({ to: '/my-exams', label: 'Marking' });
+  const backTarget = useBackTarget({ to: '/marking', label: 'Marking' });
   // Moving between scripts keeps the remembered "came from" page, so Back still returns to it.
   const keep = { state: loc.state };
 
@@ -75,7 +75,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
 }) {
   const navigate = useNavigate();
   const loc = useLocation();
-  const backTarget = useBackTarget({ to: '/my-exams', label: 'Marking' });
+  const backTarget = useBackTarget({ to: '/marking', label: 'Marking' });
   const qc = useQueryClient();
   const question = clip.question;
   const maxMarks = question.max_marks;

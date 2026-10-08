@@ -16,11 +16,12 @@ export function pathLabel(path: string): string {
   if (p === '/') return 'Home';
   if (p === '/exams') return 'Exams';
   if (p === '/exams/new') return 'New exam';
-  if (p === '/my-exams') return 'Marking';
+  if (p === '/marking' || p === '/my-exams') return 'Marking';
+  if (p === '/marking/ai' || /^\/marking\/ai\//.test(p)) return 'AI marking';
+  if (p === '/marking/comparative') return 'Comparative ranking';
   if (p === '/admin') return 'Admin';
   if (/^\/exams\/[^/]+\/setup$/.test(p)) return 'Setup';
-  if (/^\/exams\/[^/]+\/progress$/.test(p)) return 'Progress';
-  if (/^\/exams\/[^/]+\/ai$/.test(p)) return 'AI marking';
+  if (/^\/exams\/[^/]+(\/progress)?$/.test(p)) return 'Exam';
   if (/^\/compare\/[^/]+\/[^/]+\/ranking$/.test(p)) return 'Ranking';
   if (/^\/compare\//.test(p)) return 'Comparisons';
   if (/^\/mark\//.test(p)) return 'Marking';

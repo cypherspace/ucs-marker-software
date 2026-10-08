@@ -24,7 +24,7 @@ export function ComparativeMarking() {
   const { examId, questionId } = useParams<{ examId: string; questionId: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const backTarget = useBackTarget({ to: '/my-exams', label: 'Marking' });
+  const backTarget = useBackTarget({ to: '/marking', label: 'Marking' });
 
   const meQ = useQuery({ queryKey: ['auth', 'me'], queryFn: () => api.me() });
   const examQ = useQuery({ queryKey: ['exam', examId], queryFn: () => api.getExam(examId!) });
@@ -102,8 +102,8 @@ export function ComparativeMarking() {
       <div className="mx-auto max-w-xl p-4 sm:p-6">
         <PageHeader
           title="Comparative marking"
-          crumbs={[{ label: 'Home', to: '/' }, { label: 'Marking', to: '/my-exams' }, { label: 'Comparisons' }]}
-          back={{ to: '/my-exams', label: 'Marking' }}
+          crumbs={[{ label: 'Home', to: '/' }, { label: 'Marking', to: '/marking' }, { label: 'Comparisons' }]}
+          back={{ to: '/marking', label: 'Marking' }}
           subtitle="For each pair of anonymous responses, pick the better one. The ranking is built from all the comparisons."
         />
         <Card className="space-y-4 p-5">

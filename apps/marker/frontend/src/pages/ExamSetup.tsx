@@ -7,8 +7,7 @@ import { DrivePicker, driveConfigured } from '../components/DrivePicker';
 import { UploadQueuePanel } from '../components/UploadQueuePanel';
 import { QuestionClipper, type ClipperMode, type ClipperResult } from '../components/QuestionClipper';
 import { ClipRunPanel } from '../components/ClipRunPanel';
-import { Button, LinkButton } from '../components/ui';
-import { PageHeader } from '../components/PageHeader';
+import { Button } from '../components/ui';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 import { useUploadQueue } from '../hooks/useUploadQueue';
 
@@ -187,14 +186,8 @@ export function ExamSetup() {
   if (examQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
   return (
-    <div className="p-6 max-w-4xl">
-      <PageHeader
-        title={exam?.name ?? 'Exam'}
-        crumbs={[{ label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' }, { label: exam?.name ?? 'Exam' }, { label: 'Setup' }]}
-        back={{ to: '/exams', label: 'Exams' }}
-        subtitle="Upload the scripts and mark scheme, mark out the questions and choose who marks what."
-        actions={<LinkButton to={`/exams/${id}/progress`} variant="secondary">Progress</LinkButton>}
-      />
+    <div>
+      <p className="mb-4 text-sm text-slate-500">Upload the scripts and mark scheme, mark out the questions and choose who marks what.</p>
 
       {/* Tabs */}
       <div className="mb-6 flex gap-0 rounded-lg border border-slate-200 bg-white overflow-hidden w-fit">

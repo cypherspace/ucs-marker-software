@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
@@ -21,13 +21,15 @@ const signed = (n: number) => (n > 0 ? `+${n}` : String(n));
 
 export function AiMarking() {
   const { id: examId } = useParams<{ id: string }>();
+  const [search] = useSearchParams();
   const qc = useQueryClient();
 
   const examQ = useQuery({ queryKey: ['exam', examId], queryFn: () => api.getExam(examId!) });
   const questionsQ = useQuery({ queryKey: ['questions', examId], queryFn: () => api.listQuestions(examId!) });
   const aiQ = useQuery({ queryKey: ['ai-status'], queryFn: () => api.aiStatus() });
 
-  const [questionId, setQuestionId] = useState('');
+  // ?q= opens the page on a particular question (from the AI marking overview)
+  const [questionId, setQuestionId] = useState(search.get('q') ?? '');
   const [scope, setScope] = useState<AiScopeType>('unmarked');
   const [sampleCount, setSampleCount] = useState(10);
   const [mode, setMode] = useState<AiMode>('marks');
@@ -88,10 +90,10 @@ export function AiMarking() {
       <PageHeader
         title={`AI marking: ${examQ.data?.data.name ?? ''}`}
         crumbs={[
-          { label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' },
-          { label: examQ.data?.data.name ?? 'Exam', to: `/exams/${examId}/progress` }, { label: 'AI marking' },
+          { label: 'Home', to: '/' }, { label: 'Marking', to: '/marking' }, { label: 'AI marking', to: '/marking/ai' },
+          { label: examQ.data?.data.name ?? 'Exam' },
         ]}
-        back={{ to: `/exams/${examId}/progress`, label: 'Progress' }}
+        back={{ to: '/marking/ai', label: 'AI marking' }}
         subtitle="Gemini suggests a mark and feedback for each answer you choose. Suggestions appear beside your marks; where you have marked an answer yourself, your mark is the one used. Only the clipped answers are sent, with names blacked out."
       />
 

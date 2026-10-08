@@ -1,5 +1,5 @@
 import type {
-  ApiSuccess, AuthMe, Exam, ExamQuestion, StudentScript, ScriptClip,
+  ApiSuccess, AssignedQuestion, AuthMe, Exam, ExamQuestion, StudentScript, ScriptClip,
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
@@ -180,7 +180,7 @@ export const api = {
   getProgress: (examId: string) => http<ApiSuccess<ExamProgress>>(`${A}/${examId}/progress`),
 
   // Marking
-  myExams: () => http<ApiSuccess<(Exam & { assigned_questions: ExamQuestion[] })[]>>(`${A}/my-exams`),
+  myExams: () => http<ApiSuccess<(Exam & { assigned_questions: AssignedQuestion[] })[]>>(`${A}/my-exams`),
   // The clip asked for, or the first one this teacher hasn't finished
   getNextClip: (examId: string, questionId: string, clipId?: string) =>
     http<ApiSuccess<QueueClip | null>>(
