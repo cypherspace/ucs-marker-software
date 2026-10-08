@@ -168,7 +168,8 @@ function Editor({ settings, ...props }: Props & { settings: ClipSettings }) {
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
         <CoordinatePicker
-          scriptId={props.scriptId}
+          sourceKey={props.scriptId}
+          loadPage={(p) => api.fetchScriptPage(props.scriptId, p)}
           page={page}
           initialRegions={initial}
           onRegionsChange={setRegions}

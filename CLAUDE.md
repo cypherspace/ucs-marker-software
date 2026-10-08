@@ -33,6 +33,7 @@ UCS Automatic Marking System: online marking of scanned student exam scripts wit
 - Clip images and Drive: never hand the browser a Drive or bucket URL for a clip. The canvas reads the image with `crossOrigin`, the bucket has no CORS rules, and Drive token-in-URL links fail, so the clip simply did not appear on the live marking page. The image is streamed by `GET /clips/:id/image` (same origin, needs the login cookie). For server-to-server fetches of Drive files use `getDriveMediaRequest()` (a clean URL plus an `Authorization` header, see `services/scriptSource.ts`), never a token in the URL; `getDownloadUrl` was deleted.
 - Marking page (`pages/MarkingInterface.tsx`, route `/mark/:examId/:questionId/:clipId?`): the queue endpoint takes `?clip_id=` and returns `position`, `total`, `prev_id`, `next_id`, `next_unmarked_id`, `state` and the teacher's own `my_mark`; `GET /exams/:examId/questions/:questionId/clips` feeds the jump menu. Leaving a clip auto-saves a **draft** (`POST /marks` with `draft: true`: ticks and any mark are kept, status `pending`; it never un-marks a clip that was already saved; the queue's "remaining", the homepage and progress all ignore `pending` rows). The `mark_tick` annotation is worth exactly 1 mark and the Marks box follows the number of them unless a mark is typed (`markTickTotal` in `components/AnnotationCanvas.tsx`); there are no half marks. All per-clip state lives in `MarkingPanel`, keyed by clip id, so ticks cannot carry over to another script. Layout: the annotation toolbar and the script are separate panes (`AnnotationCanvas` is a fixed-height row; only the script pane scrolls), so the tools stay in view on a tall multi-page clip. Do not put the canvas back inside an outer `overflow-auto` container.
 - Clip generation runs in steps because a whole class exceeds Cloud Run's 300 s request limit: `POST /exams/:id/clip/plan`, `/clip/step` (up to 5 scripts, the UI sends 3) and `/clip/finish` (mark scheme, then the exam becomes `marking`), lead teacher or admin only; the setup page drives them with `useBatchRunner` and `components/ClipRunPanel.tsx`. The single-call `POST /exams/:id/clip` remains for small jobs.
+- Setting up questions (`components/QuestionClipper.tsx`, opened from `ExamSetup`): one drawing window with three modes. **add**: the question number and marks are typed in the window and its regions drawn on a real script; "Add question" creates it (`POST /:examId/questions` with `clip_coordinates` and `name_zones`) and starts the next (number suggested, name zone carried forward), "Save" commits the one in progress and stops. **edit**: Question and Name zone only; saves `clip_coordinates` / `name_zones` and must never send `ms_clip_coordinates`. **mark-scheme**: draws on the real mark scheme PDF (`GET /exams/:id/mark-scheme/render?page=N`, lead teacher or admin only) one question at a time and saves `ms_clip_coordinates` only; "Save & finish" runs `POST /exams/:id/mark-scheme/clip`, which clips the mark scheme without touching scripts or the exam status (a question whose region was cleared loses its old image). `CoordinatePicker` takes `sourceKey` + `loadPage`, so it can draw on any document. Before 2026-10-08 the "Mark scheme" tab drew on a *script* (the mark scheme PDF was never rendered), so mark-scheme regions could not really be defined. Uploading or replacing the mark scheme is now lead teacher / admin only.
 - `/admin` is a frontend route; only `/admin/v1` is API (Vite proxy and the production page fallback both depend on that).
 - Who may work on a question is decided in one place, `services/access.ts` (`requireQuestionAccess` / `requireClipAccess`): admin, the exam's lead teacher, or a teacher assigned to it. Use it for any route that touches clips, marks, AI or comparisons.
 - Marks: a clip can have a teacher's mark and an AI mark. The mark that counts is moderated, else latest human, else AI (`services/finalMark.ts`). Progress "marked" figures count teachers' marks only. Never join `script_marks` directly in a report; use `finalMarks()`.
@@ -48,7 +49,7 @@ UCS Automatic Marking System: online marking of scanned student exam scripts wit
 
 ## Production (GCP)
 
-Project `ucs-marking-software` (number `988173603763`), region `europe-west2`. Live as of 2026-10-06.
+Project `ucs-marking-software` (number `988173603763`), region `europe-west2`. Live since 2026-10-06.
 
 - Cloud Run `marker-api` (API + frontend, public) and `marker-extractor` (private: no unauthenticated access, ingress `all`, IAM only). Both run as `marker-sa@ucs-marking-software.iam.gserviceaccount.com`.
 - Cloud SQL `marker-postgres` (Postgres 15), database `marker_db`, IAM auth as DB user `marker-sa@ucs-marking-software.iam`. `marker-sa` needs `cloudsql.client` and `cloudsql.instanceUser`.
@@ -66,7 +67,7 @@ Project `ucs-marking-software` (number `988173603763`), region `europe-west2`. L
 
 ### Migrations are manual
 
-They are not part of the pipeline. Production was migrated by tunnelling to Cloud SQL with `@google-cloud/cloud-sql-connector` (a small TCP forwarder around `connector.getOptions({ ipType: 'PUBLIC' }).stream()`, because `startLocalProxy` is Unix-socket only and fails on Windows), setting a temporary password on the built-in `postgres` user, running `infra/db/marker/migrate.mjs up` with `DATABASE_URL` pointing at the tunnel, then granting `marker-sa`:
+They are not part of the pipeline. Production is migrated by tunnelling to Cloud SQL with `@google-cloud/cloud-sql-connector` (a small TCP forwarder around `connector.getOptions({ ipType: 'PUBLIC' }).stream()`, because `startLocalProxy` is Unix-socket only and fails on Windows), setting a temporary password on the built-in `postgres` user, running `infra/db/marker/migrate.mjs up` with `DATABASE_URL` pointing at the tunnel, then granting `marker-sa`. Run it with `node infra/db/marker/migrate-cloudsql.mjs`, which does all of that:
 
 ```sql
 GRANT ALL ON ALL TABLES IN SCHEMA public TO "marker-sa@ucs-marking-software.iam";
@@ -75,7 +76,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "marker-sa@ucs-
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "marker-sa@ucs-marking-software.iam";
 ```
 
-Applied: 001 to 006 (005 and 006 on 2026-10-07, after an on-demand backup; note 006 also deletes duplicate AI mark rows, keeping the newest per clip). **007 (per-script clip overrides: five new columns on `script_clips`, additive) is NOT applied to production yet; apply it before merging the PR that contains it, because the new code selects those columns.** Any new migration must be applied the same way, then re-run the `GRANT` statements above so `marker-sa` can use new tables and columns. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
+Applied to production: 001 to 007 (005, 006 and 007 on 2026-10-07, each after an on-demand backup; note 006 also deleted duplicate AI mark rows, keeping the newest per clip). **Apply a new migration to production BEFORE merging the PR whose code needs it**, because the deploy happens on merge and the new code would query columns that do not exist yet (migrations here are additive, so the old code keeps working once they are applied). The whole procedure (backup, temporary `postgres` password, tunnel, `migrate up`, the `GRANT` statements above so `marker-sa` can use new tables and columns) is scripted in `infra/db/marker/migrate-cloudsql.mjs`; read its header for the exact PowerShell steps. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
 
 ### Secrets gotcha
 
@@ -87,52 +88,53 @@ Secrets created from PowerShell got a UTF-8 BOM, which broke the `TOKEN_ENCRYPTI
 - The OAuth client must list both Cloud Run URLs as redirect URIs (`<url>/auth/google/callback`) and as JavaScript origins (Drive picker).
 - Access control is the app's own `users` and `allowed_emails` tables. `ALLOW_SIGNUP` is false in production, so unknown Google accounts are rejected.
 
-## Status and next steps (as of 2026-10-07)
+## Status and next steps (as of 2026-10-07, end of day)
 
-**Update 2026-10-07 (after PR #3).** Migrations 005 and 006 are applied and PR #3 is merged; Cloud Build deployed it as revision `marker-api-00007-xcj` (previous good revision: `marker-api-00005-4cs`). Verified without signing in: `/health` 200, `/admin` serves the SPA, `/auth/me`, `/api/v1/home`, `/admin/v1/*` and `/files/` return 401, the extractor returns 403 to anonymous callers, no errors in the API logs. Granted `roles/iam.serviceAccountTokenCreator` to `marker-sa` on itself, which signed GCS URLs (`services/storage.ts`) need (it was missing). **Still to check by a signed-in person** (steps 3 below): sign-in after the `disabled_at` change, the region editor on a real script, clip images while marking, the Drive picker, AI marking/judging with real Gemini, and the CSV export.
+**Where things are.** The system is live on Cloud Run and a teacher can run a whole exam through it. `main`, `dev` and production are all at the same code (`b8a4159` at the time of writing; production revisions `marker-api-00020-ptz` and `marker-extractor-00012-58p`; list revisions with `gcloud run revisions list --service=marker-api --region=europe-west2 --project=ucs-marking-software`). Migrations 001 to 007 are applied.
 
-**State before PR #3 merged.** Production ran the code from PR #2 (migrations 001 to 004). The list below was on `dev`, built and tested locally only (real Postgres, browser tests, unit tests; AI calls and Google were stubbed, so nothing had been tried against real Gemini, real Drive or the live extractor):
+**Confirmed working on the live site by the user (a real signed-in session):** Google sign-in, exam setup, the Drive picker and Drive-stored scripts, the region editor, drawing per-script clips for typed/scribed/incomplete scripts, Generate Clips, clip images on the marking page, Prev / Next / jump between scripts, Mark ticks (1 mark each, total fills the Marks box), ticks persisting per script, the annotation tools staying in view while scrolling a long script, and **typed text (handwriting recognition)** with the new Gemini key and model.
 
-- Clipper: page images load with a visible error and Retry; page count bound; clearer errors when the extractor is unreachable; regions can be selected, moved, resized, deleted, undone, cleared; Re-clip after edits (`POST /exams/:id/clip` takes `question_ids`).
-- Questions: rename, change marks, delete (blocked once teachers have marked; confirmation if clips exist); duplicate numbers refused.
-- Homepage of status cards (`GET /api/v1/home`), shared button components (`components/ui.tsx`), clearer Exams page.
-- Admin page (`/admin`: Staff, Marking overview, Activity), deactivation (migration 005), last-admin and self-demotion guards, audit log, `GET /api/v1/teachers` for non-admin lead teachers.
-- AI marking page, typed-text (OCR) and AI-suggestion panels on the marking screen, comparative marking with pair generation, teacher-chosen judging quotas, AI judging of the rest, Bradley-Terry ranking (migration 006). Export is one row per clip (teacher's mark, else AI's) with `ai_marks_awarded`, and `rank`/`score` for comparative questions.
-- Drive picker: folders, Shared with me, shared drives; one request per PDF with per-file progress and retry.
+**Not yet tried live (do these next):**
+1. **AI marking and AI judging.** Blocked only because the test exam has no mark scheme yet. AI marking needs a mark-scheme region on the question (upload the mark scheme PDF, draw the MS region, Generate Clips) or typed guidance. Run it on a handful of clips, read the reasoning, confirm a teacher's mark always wins over the AI's, and confirm nothing identifying (names) is in the output. It uses the same key and model as typed text, which is known to work, but the AI marking prompts have only been tested with `AI_STUB=1`.
+2. CSV export (new columns, one row per clip), comparative marking (pair generation, judging, ranking), and the admin page (staff, marking overview, activity).
+3. Generate Clips on a whole class (it now runs in small steps with a progress bar; tested locally and on small exams, not yet on a full class).
+4. The new question clipper and mark-scheme clipping (2026-10-08): "Add questions" (draw question after question), "Clip the mark scheme" (draw on the real mark scheme), and the per-question "Mark scheme" button. Tested locally in a browser and through the API (13 checks); not yet tried on the live site.
 
-**Behaviour changes to know about.** Teachers must be assigned to a question (or lead the exam, or be admin) to mark it, see its clips or judge it. Only the lead teacher or an admin can run AI marking, set up comparisons or see rankings. AI marking needs a mark-scheme region on the question or typed guidance. `/admin` is now a frontend route.
+**Before real student work (decisions for the owner):**
+- **Replace the Gemini key.** The key in use is a free-tier AI Studio key from a staff member's school account, accepted for the experiment only. Student work is sent to Gemini and Google's terms for the UK/EEA require paid services, so use a key from a billing-enabled, school-owned Cloud project. The Generative Language API is already enabled on `ucs-marking-software`. Replacing it: put the key in the local `.env` (git-ignored), then add a new `marker-gemini-api-key` secret version (BOM-free, see below) and start a new Cloud Run revision. Never paste it into chat or commit it.
+- **The GitHub repo is public.** `CLAUDE.md` describes the live setup (project number, URLs, service-account and secret names; no secret values). Consider making the repo private; the Cloud Build trigger and cloud sessions both still work with a private repo.
+- **Project ownership.** `ucs-marking-software` belongs to a personal Google account with no organisation. For school data, move it under a school-owned organisation or recreate it there.
+- Model retirement: see the Gemini bullet under Code gotchas. `gemini-2.5-flash` is already refused for new keys.
 
-**Next steps, in order:**
+**What the app does now (for orientation).**
+- Teachers must be assigned to a question (or lead the exam, or be admin) to mark it, see its clips or judge it. Only the lead teacher or an admin can run AI marking, set up comparisons, see rankings or generate clips.
+- Marking: per-script clips, Mark ticks, drafts auto-saved when moving between scripts, typed text, AI suggestion panel, mark-scheme panel. Export is one row per clip (teacher's mark, else AI's) with `ai_marks_awarded`, plus `rank`/`score` for comparative questions.
+- Admin: staff list, invites, deactivation, last-admin and self-demotion guards, audit log, marking overview.
 
-1. **Apply migrations 005 and 006 to production before merging.** The new code reads `users.disabled_at`, so deploying first breaks sign-in for everyone. Both migrations only add columns and tables, so the live app keeps working after they are applied. The agent environment has no Google Cloud access, so this is done from a machine with `gcloud` (PowerShell, from the repo root on an up-to-date `dev`):
-   - Backup: `gcloud sql backups create --instance=marker-postgres --project=ucs-marking-software`
-   - Temporary password: `gcloud sql users set-password postgres --instance=marker-postgres --project=ucs-marking-software --password=<TEMP>`
-   - Tunnel to `ucs-marking-software:europe-west2:marker-postgres` (the connector forwarder described above, or the Cloud SQL Auth Proxy on a local port such as 5436).
-   - `$env:DATABASE_URL="postgresql://postgres:<TEMP>@localhost:5436/marker_db"; npm run migrate:up` (expect `005_user_deactivation` and `006_ai_and_comparative`).
-   - Re-run the four `GRANT` / `ALTER DEFAULT PRIVILEGES` statements above, check `select name from pgmigrations order by id;` ends at 006, then set the `postgres` password to a new random value.
-2. **Merge PR #3.** Every push to `main` runs Cloud Build, which deploys both services. Watch the build (`gcloud builds list --project=ucs-marking-software`). To go back: `gcloud run services update-traffic marker-api --to-revisions=<previous>=100` (the migrations need no rollback).
-3. **Check the live site.** `/health`; sign in; then:
-   - Open the region editor on a real script. The live blank clipper was never diagnosed; the editor now shows the actual error. If it still fails, note the message and the status of `/api/v1/scripts/<id>/render?page=1` in the browser Network tab, and read `gcloud run services logs read marker-api --region europe-west2 --project ucs-marking-software --limit 50` (and the same for `marker-extractor`). Suspects: the ID-token call to the private extractor (audience or invoker), the extractor reading the script from GCS, a Drive-stored script whose lead teacher has no valid Drive token.
-   - Check clip images appear while marking. Signed GCS URLs (`services/storage.ts`) need `signBlob` rights; `marker-sa` has no token-creator role listed, so this may fail.
-   - Drive picker with a real account: open a nested folder, find an old PDF, pick several, upload, confirm scripts are numbered in name order and land in the exam's Drive folder; also Shared with me and a shared drive. The tab names depend on a Google picker option (`setLabel`) that was only tested against a stub.
-   - AI marking and AI judging on a handful of clips with the real Gemini key: read the reasoning, confirm teachers' marks still win, and confirm nothing identifying is in the output.
-   - Export CSV: new columns present, one row per clip.
-4. Then pick from the open items below.
+**How work is done here (working agreements).**
+- `main` is deployed: every push or merge to `main` runs Cloud Build and deploys both services (about 5 minutes). Develop on `dev` or a short-lived branch, open a PR into `main`, and **only merge when the owner says so**. After a deploy, check `/health`, the 401s on protected routes, the revision and the error logs (see the checks used in earlier merges: `gcloud builds list`, `gcloud run services describe`, `gcloud logging read`).
+- **Production changes need the owner's explicit go-ahead**: running migrations, changing secrets or IAM, setting service env vars, resetting the `postgres` password. Read-only checks (logs, build status, revision lists, bucket and key listings) are fine. An automatic safety classifier may also block these actions; do not work around a denial, explain it and let the owner approve or run the command.
+- Roll back a bad deploy by sending traffic to the previous revision: `gcloud run services update-traffic marker-api --to-revisions=<previous>=100 --region=europe-west2 --project=ucs-marking-software`. Migrations here are additive and need no rollback.
+- Local test recipe that has worked well: a throwaway Postgres container on port 5436, `npm run migrate:up` against it, seed users and `sessions` rows by SQL (real session cookies `sid=...`, so the access rules are exercised, not bypassed with `AUTH_DISABLED`), run the extractor on 8081 and the built API on 8080 (`AI_STUB=1`), drive it with a small Python script, then check the UI in a browser. Remove the container afterwards.
+- On the owner's Windows machine commands run in PowerShell 5.1: no `&&`, native stderr shows as red `NativeCommandError` noise even on success, a leading `Start-Sleep` is blocked (run long waits in the background), and double quotes inside an inline `git commit -m` message break; use `git commit -F <file>` (and `gh pr create --body-file`) for anything multi-line.
 
 ## Known limits / open items
 
-
 - Cloud Run caps request bodies at 32 MB, so each uploaded PDF must be under about 31.9 MB (the upload screen says so). A server-side Drive import would remove this limit; it needs the uploader's stored Drive token and confirmation that Google's per-file grant also applies to the server's token.
+- Each hand re-selected clip (or bulk re-clip) uploads a new clip file to Drive and leaves the previous one behind. Deleting a question also leaves its clip image files in storage.
+- Name zones are per page, so a student name printed outside a defined zone is visible to markers (also in the Script pages viewer). Check the cover page of typed or scribed scripts and have the lead teacher draw a name zone for that script.
 - CORS is `origin: true` with credentials (not tightened; low risk with `SameSite=Lax` and same-origin hosting).
-- Live end-to-end testing of script upload, clip generation (private extractor with ID-token auth) and Drive storage has still not been done.
-- Deleting a question leaves its clip image files in storage.
 - Comparative ranking is not yet converted into marks (no grade boundaries); no bulk OCR; no examiner-report upload for the AI.
-- Not built: Drive connection status per teacher, "sign out everywhere" and pruning expired sessions (`pruneExpiredSessions` exists but is never called), reassigning an exam's lead teacher, bulk invite, AI usage and cost tracking.
+- Not built: Drive connection status per teacher, "sign out everywhere" and pruning expired sessions (`pruneExpiredSessions` exists but is never called), reassigning an exam's lead teacher, bulk invite, AI usage and cost tracking, half marks.
 - `requireAuth` is async without error handling, so a database failure while loading a session is an unhandled rejection.
-- `GET /exams/:id`, `/progress` and `/questions` only require sign-in, not access to the exam.
+- `GET /exams/:id`, `/progress` and `/questions` only require sign-in, not access to the exam (any signed-in teacher can read an exam's metadata and progress). Worth tightening.
 - Separate repo, `caie-exam-builder`: `POST /papers/upload` has no admin check, so any signed-in teacher can ingest papers and trigger paid Gemini calls.
-- Migrations and the Cloud Build pipeline: migrations are still manual. Running them in the pipeline would need the app's database account to own or alter tables.
-- Branching: `main` is what is deployed (every push triggers a Cloud Build deploy). Develop on `dev`, then PR into `main` to release.
+- Migrations are still manual (`infra/db/marker/migrate-cloudsql.mjs`); running them in the pipeline would need the app's database account to own or alter tables.
+- Branching: `main` is what is deployed. Cloud sessions and day-to-day work start from `dev` (kept equal to `main` after each release: fast-forward it with `git merge --ff-only origin/main`), then PR into `main` to release.
+
+## Future possibilities (low priority, not planned)
+
+- **Google Classroom integration** (import a chosen assignment's submissions, annotate, maybe return marks): feasibility check and a phased outline are in `docs/future/google-classroom-integration.md`. Key facts: importing is feasible but needs the project moved under a school Workspace organisation (Internal user type) to use a restricted Drive scope; the plain Classroom API cannot grade assignments the app did not create, so marks back needs app-created assignments or a Classroom add-on, otherwise a marks export. Do not start it without the owner asking.
 
 ## Working in a fresh checkout
 

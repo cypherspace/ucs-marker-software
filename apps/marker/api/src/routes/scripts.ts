@@ -70,8 +70,8 @@ router.post('/exams/:id/mark-scheme', requireAuth, requireRole(['teacher', 'admi
     const file = req.file as Express.Multer.File | undefined;
     if (!file) { res.status(422).json({ error: 'No file uploaded', code: 'NO_FILE' }); return; }
 
-    const exam = await db('exams').where({ id: req.params.id }).first();
-    if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return; }
+    const exam = await loadLeadExam(req, res);
+    if (!exam) return;
 
     const key = `mark-schemes/${req.params.id}.pdf`;
     const uri = await storage.write(key, file.buffer);
@@ -119,17 +119,69 @@ interface Failure { status: number; error: string; code: string }
 
 const ClipBodySchema = z.object({ question_ids: z.array(z.string().uuid()).optional() });
 
-async function loadClipJob(
-  req: ExpressRequest, res: ExpressResponse, questionIds?: string[],
-): Promise<{ exam: ClipExam; scripts: ClipScript[]; questions: ClipQuestion[] } | null> {
+// The exam in the URL, if the signed-in user may set it up (its lead teacher, or an admin)
+async function loadLeadExam(req: ExpressRequest, res: ExpressResponse): Promise<ClipExam | null> {
   const exam = await db('exams').where({ id: req.params.id }).first<ClipExam>(
     'id', 'lead_teacher_id', 'use_drive_storage', 'drive_folder_id', 'mark_scheme_pdf_url',
   );
   if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return null; }
   const user = req.user!;
   if (user.role !== 'admin' && exam.lead_teacher_id !== user.sub) {
-    res.status(403).json({ error: 'Only the exam\'s lead teacher can generate clips', code: 'FORBIDDEN' }); return null;
+    res.status(403).json({ error: 'Only the exam\'s lead teacher can set this up', code: 'FORBIDDEN' }); return null;
   }
+  return exam;
+}
+
+// Ask the extractor for one page of a PDF as a PNG and pass it on (with the page count in X-Page-Count).
+// max_width is fixed high so the render scale is always 150/72: the frontend relies on that to convert
+// the regions it draws (image pixels) back to PDF points before saving.
+async function sendRenderedPage(
+  res: ExpressResponse,
+  opts: { pdfUri: string; pdfHeaders?: Record<string, string>; page: number; maskZones?: unknown[] },
+): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await extractorFetch('/render', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pdf_uri: opts.pdfUri, pdf_headers: opts.pdfHeaders, page_number: opts.page, max_width: 2000, mask_zones: opts.maskZones,
+      }),
+    });
+  } catch (err) {
+    console.error('Extractor unreachable:', err);
+    res.status(502).json({
+      error: `Could not reach the page renderer: ${describeExtractorFailure(err)}`,
+      code: 'EXTRACTOR_UNREACHABLE',
+    });
+    return;
+  }
+  if (!resp.ok) {
+    const body = await resp.text();
+    console.error(`Extractor render error (${resp.status}):`, body);
+    let detail = '';
+    try { detail = String((JSON.parse(body) as { detail?: unknown }).detail ?? ''); } catch { /* not JSON */ }
+    if (resp.status === 400) {
+      res.status(400).json({ error: detail || 'Invalid page', code: 'BAD_REQUEST' }); return;
+    }
+    res.status(502).json({
+      error: `Page render failed (extractor returned ${resp.status}${detail ? `: ${detail}` : ''})`,
+      code: 'EXTRACTOR_ERROR',
+    });
+    return;
+  }
+  const pageCount = resp.headers.get('x-page-count');
+  if (pageCount) res.setHeader('X-Page-Count', pageCount);
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.send(Buffer.from(await resp.arrayBuffer()));
+}
+
+async function loadClipJob(
+  req: ExpressRequest, res: ExpressResponse, questionIds?: string[],
+): Promise<{ exam: ClipExam; scripts: ClipScript[]; questions: ClipQuestion[] } | null> {
+  const exam = await loadLeadExam(req, res);
+  if (!exam) return null;
   const scripts = await db('student_scripts').where({ exam_id: exam.id }).orderBy('student_number')
     .select<ClipScript[]>('id', 'student_number', 'original_pdf_url');
   const questionsQuery = db('exam_questions').where({ exam_id: exam.id });
@@ -210,33 +262,46 @@ async function clipOneScript(
   return { made: result.clips.length, kept: manual.size };
 }
 
-// One mark-scheme clip per question (not per script), stored on the question, then the exam is ready to mark.
-async function finishClipping(exam: ClipExam, questions: ClipQuestion[]): Promise<number> {
-  let created = 0;
-  const msQuestions = questions.filter((q) => Array.isArray(q.ms_clip_coordinates) && q.ms_clip_coordinates.length);
-  if (exam.mark_scheme_pdf_url && msQuestions.length) {
-    try {
-      const msResp = await extractorFetch('/clip-mark-scheme', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ms_pdf_url: storage.rawUri(exam.mark_scheme_pdf_url),
-          questions: msQuestions.map((q) => ({ id: q.id, ms_clip_coordinates: q.ms_clip_coordinates })),
-        }),
-      });
-      if (msResp.ok) {
-        const msResult = (await msResp.json()) as { clips: { question_id: string; ms_clip_image_url: string }[] };
-        for (const c of msResult.clips) {
-          await db('exam_questions').where({ id: c.question_id }).update({ ms_clip_image_url: c.ms_clip_image_url });
-        }
-        created = msResult.clips.length;
-      } else {
-        console.error('Mark scheme clip error:', await msResp.text());
-      }
-    } catch (msErr) {
-      console.error('Mark scheme clipping failed:', msErr);
-    }
+// One mark-scheme clip per question (not per script), stored on the question. A question whose
+// mark-scheme region was cleared loses its old image so markers never see a stale one.
+async function clipMarkScheme(exam: ClipExam, questions: ClipQuestion[]): Promise<{ created: number; error?: string }> {
+  if (!exam.mark_scheme_pdf_url) return { created: 0 };
+  const withRegions = questions.filter((q) => Array.isArray(q.ms_clip_coordinates) && q.ms_clip_coordinates.length);
+  const withoutRegions = questions.filter((q) => !withRegions.includes(q)).map((q) => q.id);
+  if (withoutRegions.length) {
+    await db('exam_questions').whereIn('id', withoutRegions).update({ ms_clip_image_url: null });
   }
+  if (!withRegions.length) return { created: 0 };
+  try {
+    const msResp = await extractorFetch('/clip-mark-scheme', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ms_pdf_url: storage.rawUri(exam.mark_scheme_pdf_url),
+        questions: withRegions.map((q) => ({ id: q.id, ms_clip_coordinates: q.ms_clip_coordinates })),
+      }),
+    });
+    if (!msResp.ok) {
+      const body = await msResp.text();
+      console.error('Mark scheme clip error:', body);
+      let detail = '';
+      try { detail = String((JSON.parse(body) as { detail?: unknown }).detail ?? ''); } catch { /* not JSON */ }
+      return { created: 0, error: `Mark scheme clipping failed (extractor returned ${msResp.status}${detail ? `: ${detail}` : ''})` };
+    }
+    const msResult = (await msResp.json()) as { clips: { question_id: string; ms_clip_image_url: string }[] };
+    for (const c of msResult.clips) {
+      await db('exam_questions').where({ id: c.question_id }).update({ ms_clip_image_url: c.ms_clip_image_url });
+    }
+    return { created: msResult.clips.length };
+  } catch (err) {
+    console.error('Mark scheme clipping failed:', err);
+    return { created: 0, error: `Could not reach the clipping service: ${describeExtractorFailure(err)}` };
+  }
+}
+
+// Mark scheme, then the exam is ready to mark.
+async function finishClipping(exam: ClipExam, questions: ClipQuestion[]): Promise<number> {
+  const { created } = await clipMarkScheme(exam, questions);
   await db('exams').where({ id: exam.id }).update({ status: 'marking' });
   return created;
 }
@@ -286,6 +351,25 @@ router.post('/exams/:id/clip/finish', ...clipAuth, async (req, res, next) => {
     const job = await loadClipJob(req, res, question_ids);
     if (!job) return;
     res.json({ data: { ms_clips_created: await finishClipping(job.exam, job.questions) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Clip just the mark scheme (one image per question that has a mark-scheme region). Does not touch the
+// scripts or the exam status, so it can be run as soon as mark-scheme regions have been drawn.
+router.post('/exams/:id/mark-scheme/clip', ...clipAuth, async (req, res, next) => {
+  try {
+    const exam = await loadLeadExam(req, res);
+    if (!exam) return;
+    if (!exam.mark_scheme_pdf_url) {
+      res.status(422).json({ error: 'No mark scheme has been uploaded for this exam', code: 'NO_MARK_SCHEME' }); return;
+    }
+    const questions = await db('exam_questions').where({ exam_id: exam.id })
+      .select<ClipQuestion[]>('id', 'clip_coordinates', 'name_zones', 'ms_clip_coordinates');
+    const { created, error } = await clipMarkScheme(exam, questions);
+    if (error) { res.status(502).json({ error, code: 'EXTRACTOR_ERROR' }); return; }
+    res.json({ data: { ms_clips_created: created } });
   } catch (err) {
     next(err);
   }
@@ -351,41 +435,26 @@ router.get('/scripts/:scriptId/render', requireAuth, requireRole(['teacher', 'ad
     }
 
     const { url: pdfUri, headers: pdfHeaders } = await scriptPdfSource(script.original_pdf_url, script.lead_teacher_id);
+    await sendRenderedPage(res, { pdfUri, pdfHeaders, page, maskZones });
+  } catch (err) {
+    next(err);
+  }
+});
 
-    let resp: Response;
-    try {
-      resp = await extractorFetch('/render', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pdf_uri: pdfUri, pdf_headers: pdfHeaders, page_number: page, max_width: 2000, mask_zones: maskZones }),
-      });
-    } catch (err) {
-      console.error('Extractor unreachable:', err);
-      res.status(502).json({
-        error: `Could not reach the page renderer: ${describeExtractorFailure(err)}`,
-        code: 'EXTRACTOR_UNREACHABLE',
-      });
-      return;
+// The mark scheme PDF, page by page, so mark-scheme regions can be drawn on the real mark scheme.
+// Lead teacher or admin only. A mark scheme holds no student data, and markers only ever see the clipped image.
+router.get('/exams/:id/mark-scheme/render', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    const exam = await loadLeadExam(req, res);
+    if (!exam) return;
+    if (!exam.mark_scheme_pdf_url) {
+      res.status(404).json({ error: 'No mark scheme has been uploaded for this exam', code: 'NO_MARK_SCHEME' }); return;
     }
-    if (!resp.ok) {
-      const body = await resp.text();
-      console.error(`Extractor render error (${resp.status}):`, body);
-      let detail = '';
-      try { detail = String((JSON.parse(body) as { detail?: unknown }).detail ?? ''); } catch { /* not JSON */ }
-      if (resp.status === 400) {
-        res.status(400).json({ error: detail || 'Invalid page', code: 'BAD_REQUEST' }); return;
-      }
-      res.status(502).json({
-        error: `Page render failed (extractor returned ${resp.status}${detail ? `: ${detail}` : ''})`,
-        code: 'EXTRACTOR_ERROR',
-      });
-      return;
+    const page = Number(req.query.page ?? 1);
+    if (!Number.isInteger(page) || page < 1) {
+      res.status(400).json({ error: 'Invalid page', code: 'BAD_REQUEST' }); return;
     }
-    const pageCount = resp.headers.get('x-page-count');
-    if (pageCount) res.setHeader('X-Page-Count', pageCount);
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'private, max-age=300');
-    res.send(Buffer.from(await resp.arrayBuffer()));
+    await sendRenderedPage(res, { pdfUri: storage.rawUri(exam.mark_scheme_pdf_url), page });
   } catch (err) {
     next(err);
   }
