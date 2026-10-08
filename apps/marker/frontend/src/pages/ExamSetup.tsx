@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
 import type { ExamQuestion } from '@marker/shared-types';
@@ -7,7 +7,8 @@ import { DrivePicker, driveConfigured } from '../components/DrivePicker';
 import { UploadQueuePanel } from '../components/UploadQueuePanel';
 import { QuestionClipper, type ClipperMode, type ClipperResult } from '../components/QuestionClipper';
 import { ClipRunPanel } from '../components/ClipRunPanel';
-import { Button } from '../components/ui';
+import { Button, LinkButton } from '../components/ui';
+import { PageHeader } from '../components/PageHeader';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 import { useUploadQueue } from '../hooks/useUploadQueue';
 
@@ -187,11 +188,13 @@ export function ExamSetup() {
 
   return (
     <div className="p-6 max-w-4xl">
-      <div className="mb-4 flex items-center gap-4">
-        <Link to="/exams" className="text-sm text-indigo-600 hover:underline">← Exams</Link>
-        <h1 className="text-2xl font-semibold text-slate-800">{exam?.name}</h1>
-        <Link to={`/exams/${id}/progress`} className="ml-auto text-sm text-indigo-600 hover:underline">View Progress →</Link>
-      </div>
+      <PageHeader
+        title={exam?.name ?? 'Exam'}
+        crumbs={[{ label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' }, { label: exam?.name ?? 'Exam' }, { label: 'Setup' }]}
+        back={{ to: '/exams', label: 'Exams' }}
+        subtitle="Upload the scripts and mark scheme, mark out the questions and choose who marks what."
+        actions={<LinkButton to={`/exams/${id}/progress`} variant="secondary">Progress</LinkButton>}
+      />
 
       {/* Tabs */}
       <div className="mb-6 flex gap-0 rounded-lg border border-slate-200 bg-white overflow-hidden w-fit">

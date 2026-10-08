@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../api';
-import { Button, Card, LinkButton, ProgressBar } from '../components/ui';
+import { AppLink, Button, Card, LinkButton, ProgressBar } from '../components/ui';
+import { PageHeader } from '../components/PageHeader';
 
 export function ExamProgress() {
   const { id } = useParams<{ id: string }>();
@@ -37,26 +38,31 @@ export function ExamProgress() {
 
   return (
     <div className="max-w-4xl p-4 sm:p-6">
-      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <Link to="/exams" className="text-sm text-indigo-600 hover:underline">← Exams</Link>
-        <h1 className="text-2xl font-semibold text-slate-800">{exam?.name}</h1>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <LinkButton to={`/exams/${id}/ai`} variant="secondary">AI marking</LinkButton>
-          <Button
-            onClick={() => { setExportMsg(null); exportMutation.mutate(false); }}
-            disabled={exportMutation.isPending}
-          >
-            {exportMutation.isPending ? 'Exporting…' : 'Export results'}
-          </Button>
-          <Button
-            onClick={() => { setExportMsg(null); exportMutation.mutate(true); }}
-            disabled={exportMutation.isPending}
-            title="Adds student names via a database join. Names never leave the platform otherwise."
-          >
-            Export with names
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title={exam?.name ?? 'Exam'}
+        crumbs={[{ label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' }, { label: exam?.name ?? 'Exam' }, { label: 'Progress' }]}
+        back={{ to: '/exams', label: 'Exams' }}
+        subtitle="How far marking has got for each question."
+        actions={
+          <>
+            <LinkButton to={`/exams/${id}/setup`} variant="secondary">Setup</LinkButton>
+            <LinkButton to={`/exams/${id}/ai`} variant="secondary">AI marking</LinkButton>
+            <Button
+              onClick={() => { setExportMsg(null); exportMutation.mutate(false); }}
+              disabled={exportMutation.isPending}
+            >
+              {exportMutation.isPending ? 'Exporting…' : 'Export results'}
+            </Button>
+            <Button
+              onClick={() => { setExportMsg(null); exportMutation.mutate(true); }}
+              disabled={exportMutation.isPending}
+              title="Adds student names via a database join. Names never leave the platform otherwise."
+            >
+              Export with names
+            </Button>
+          </>
+        }
+      />
       {exportMsg && <p role="status" className="mb-4 text-sm text-slate-600">{exportMsg}</p>}
 
       <div className="space-y-4">
@@ -114,7 +120,7 @@ export function ExamProgress() {
         })}
         {!progress?.questions.length && (
           <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
-            No questions defined yet. <Link to={`/exams/${id}/setup`} className="text-indigo-600 hover:underline">Go to setup →</Link>
+            No questions defined yet. <AppLink to={`/exams/${id}/setup`} className="text-indigo-600 hover:underline">Go to setup</AppLink>
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 import { LinkButton, ProgressBar, StatusPill } from '../components/ui';
+import { PageHeader } from '../components/PageHeader';
 import type { Exam } from '@marker/shared-types';
 
 export function ExamList() {
@@ -16,10 +17,12 @@ export function ExamList() {
 
   return (
     <div className="max-w-4xl p-4 sm:p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-slate-800">Exams</h1>
-        <LinkButton to="/exams/new" variant="primary">New exam</LinkButton>
-      </div>
+      <PageHeader
+        title="Exams"
+        crumbs={[{ label: 'Home', to: '/' }]}
+        subtitle="Set up papers, follow marking progress and export results."
+        actions={<LinkButton to="/exams/new" variant="primary">New exam</LinkButton>}
+      />
 
       {exams.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-12 text-center">
@@ -59,7 +62,7 @@ export function ExamList() {
                     {inSetup ? 'Continue setup' : 'Setup'}
                   </LinkButton>
                   <LinkButton to={`/exams/${exam.id}/progress`} variant={inSetup ? 'secondary' : 'primary'}>
-                    View progress
+                    Progress
                   </LinkButton>
                 </div>
               </li>

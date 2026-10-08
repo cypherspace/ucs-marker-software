@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
+import { PageHeader } from '../components/PageHeader';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Button, Card, ProgressBar } from '../components/ui';
@@ -84,12 +85,15 @@ export function AiMarking() {
 
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
-      <Link to={`/exams/${examId}/progress`} className="text-sm text-indigo-600 hover:underline">← Progress</Link>
-      <h1 className="mb-1 mt-2 text-2xl font-semibold text-slate-800">AI marking: {examQ.data?.data.name}</h1>
-      <p className="mb-5 text-sm text-slate-500">
-        AI marks sit alongside teachers' marks and never replace them: where a teacher has marked a clip, their mark counts.
-        Only the clipped answers go to Gemini, with names blacked out.
-      </p>
+      <PageHeader
+        title={`AI marking: ${examQ.data?.data.name ?? ''}`}
+        crumbs={[
+          { label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' },
+          { label: examQ.data?.data.name ?? 'Exam', to: `/exams/${examId}/progress` }, { label: 'AI marking' },
+        ]}
+        back={{ to: `/exams/${examId}/progress`, label: 'Progress' }}
+        subtitle="Gemini suggests a mark and feedback for each answer you choose. Suggestions appear beside your marks; where you have marked an answer yourself, your mark is the one used. Only the clipped answers are sent, with names blacked out."
+      />
 
       {!configured && (
         <Card className="mb-5 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900" >

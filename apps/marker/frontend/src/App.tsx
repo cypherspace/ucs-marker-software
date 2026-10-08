@@ -69,7 +69,7 @@ export function App() {
         <h1 className="whitespace-nowrap text-lg font-semibold"><Link to="/" className="hover:opacity-90">UCS Marking</Link></h1>
         <nav className="flex flex-wrap gap-x-3 text-sm whitespace-nowrap">
           <NavLink to="/" end className={navCls}>Home</NavLink>
-          <NavLink to="/my-exams" className={navCls}>My Marking</NavLink>
+          <NavLink to="/my-exams" className={navCls}>Marking</NavLink>
           {isTeacherOrAdmin && <NavLink to="/exams" className={navCls}>Exams</NavLink>}
           {me.role === 'admin' && <NavLink to="/admin" className={navCls}>Admin</NavLink>}
         </nav>

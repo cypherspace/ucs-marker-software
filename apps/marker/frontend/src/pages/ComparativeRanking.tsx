@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
-import { Button, Card, LinkButton, ProgressBar } from '../components/ui';
+import { AppLink, Button, Card, LinkButton, ProgressBar } from '../components/ui';
+import { PageHeader } from '../components/PageHeader';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 
 export function ComparativeRanking() {
@@ -66,7 +67,7 @@ export function ComparativeRanking() {
     return (
       <div className="p-6 text-sm text-slate-600" role="alert">
         Only the lead teacher or an admin can manage comparisons and see the ranking.{' '}
-        <Link to={`/compare/${examId}/${questionId}`} className="text-indigo-600 hover:underline">Judge some comparisons</Link>
+        <AppLink to={`/compare/${examId}/${questionId}`} className="text-indigo-600 hover:underline">Judge some comparisons</AppLink>
       </div>
     );
   }
@@ -83,18 +84,20 @@ export function ComparativeRanking() {
 
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
-      <Link to={`/exams/${examId}/progress`} className="text-sm text-indigo-600 hover:underline">← Progress</Link>
-      <h1 className="mb-1 mt-2 text-2xl font-semibold text-slate-800">
-        Ranking: {examQ.data?.data.name}
-      </h1>
-      <p className="mb-5 text-sm text-slate-500">
-        Scripts are ranked from every comparison so far. A teacher's judgement counts instead of the AI's on the same pair.
-      </p>
+      <PageHeader
+        title={`Ranking: ${examQ.data?.data.name ?? ''}`}
+        crumbs={[
+          { label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' },
+          { label: examQ.data?.data.name ?? 'Exam', to: `/exams/${examId}/progress` }, { label: 'Ranking' },
+        ]}
+        back={{ to: `/exams/${examId}/progress`, label: 'Progress' }}
+        subtitle="Scripts ranked from every comparison made so far. Where a teacher and the AI judged the same pair, the teacher's judgement is used."
+      />
 
       {status.marking_mode !== 'comparative' && (
         <Card className="mb-5 p-4 text-sm text-slate-700">
           This question is not set to "Rank by comparison". Change it on the exam's{' '}
-          <Link to={`/exams/${examId}/setup`} className="text-indigo-600 hover:underline">setup page</Link>.
+          <AppLink to={`/exams/${examId}/setup`} className="text-indigo-600 hover:underline">setup page</AppLink>.
         </Card>
       )}
 

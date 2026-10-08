@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import { api } from '../api';
-import { buttonClass } from '../components/ui';
+import { AppLink, buttonClass } from '../components/ui';
+import { PageHeader } from '../components/PageHeader';
 import type { ExamQuestion } from '@marker/shared-types';
 
 export function MyExams() {
@@ -14,8 +14,12 @@ export function MyExams() {
   const exams = data?.data ?? [];
 
   return (
-    <div className="p-6 max-w-4xl">
-      <h1 className="mb-6 text-2xl font-semibold text-slate-800">My Marking</h1>
+    <div className="p-4 sm:p-6 max-w-4xl">
+      <PageHeader
+        title="Marking"
+        crumbs={[{ label: 'Home', to: '/' }]}
+        subtitle="The questions you have been asked to mark. Choose one to carry on where you left off."
+      />
 
       {exams.length === 0 ? (
         <div className="rounded-lg border border-dashed border-slate-300 p-12 text-center">
@@ -33,7 +37,7 @@ export function MyExams() {
                 {exam.assigned_questions.map((q: ExamQuestion) => {
                   const comparative = q.marking_mode === 'comparative';
                   return (
-                    <Link
+                    <AppLink
                       key={q.id}
                       to={comparative ? `/compare/${exam.id}/${q.id}` : `/mark/${exam.id}/${q.id}`}
                       className={buttonClass('secondary')}
@@ -41,7 +45,7 @@ export function MyExams() {
                       <span>{comparative ? 'Compare' : 'Mark'} Q{q.question_number}</span>
                       <span className="text-slate-400">·</span>
                       <span>{comparative ? 'ranking' : `${q.max_marks} marks`}</span>
-                    </Link>
+                    </AppLink>
                   );
                 })}
               </div>

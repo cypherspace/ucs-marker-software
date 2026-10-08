@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useBackTarget } from '../lib/nav';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
 import { AnnotationCanvas, markTickTotal } from '../components/AnnotationCanvas';
@@ -12,6 +13,10 @@ import type { AnnotationData, QueueClip } from '@marker/shared-types';
 export function MarkingInterface() {
   const { examId, questionId, clipId } = useParams<{ examId: string; questionId: string; clipId?: string }>();
   const navigate = useNavigate();
+  const loc = useLocation();
+  const backTarget = useBackTarget({ to: '/my-exams', label: 'Marking' });
+  // Moving between scripts keeps the remembered "came from" page, so Back still returns to it.
+  const keep = { state: loc.state };
 
   const clipQ = useQuery({
     queryKey: ['clip-queue', examId, questionId, clipId ?? 'next'],
@@ -26,7 +31,7 @@ export function MarkingInterface() {
     return (
       <div className="p-6 text-center">
         <p role="alert" className="mb-4 text-red-700">{(clipQ.error as Error).message}</p>
-        <Button onClick={() => navigate(`/mark/${examId}/${questionId}`)}>Back to the first unmarked clip</Button>
+        <Button onClick={() => navigate(`/mark/${examId}/${questionId}`, keep)}>Back to the first unmarked clip</Button>
       </div>
     );
   }
@@ -39,8 +44,8 @@ export function MarkingInterface() {
         <div className="text-2xl mb-2">All done!</div>
         <p className="text-slate-500 mb-4">You've marked all clips for this question.</p>
         <div className="flex justify-center gap-2">
-          {firstId && <Button onClick={() => navigate(`/mark/${examId}/${questionId}/${firstId}`)}>Review your marking</Button>}
-          <Button variant="primary" onClick={() => navigate('/my-exams')}>Back to My Marking</Button>
+          {firstId && <Button onClick={() => navigate(`/mark/${examId}/${questionId}/${firstId}`, keep)}>Review your marking</Button>}
+          <Button variant="primary" onClick={() => navigate(backTarget.to, { state: backTarget.state })}>Back to {backTarget.label}</Button>
         </div>
       </div>
     );
@@ -63,6 +68,8 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   clip: QueueClip; examId: string; questionId: string; refetch: () => void;
 }) {
   const navigate = useNavigate();
+  const loc = useLocation();
+  const backTarget = useBackTarget({ to: '/my-exams', label: 'Marking' });
   const qc = useQueryClient();
   const question = clip.question;
   const maxMarks = question.max_marks;
@@ -125,7 +132,8 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     return () => window.removeEventListener('beforeunload', handler);
   }, [dirty]);
 
-  const go = (id: string | null) => navigate(id ? `/mark/${examId}/${questionId}/${id}` : `/mark/${examId}/${questionId}`);
+  const go = (id: string | null) =>
+    navigate(id ? `/mark/${examId}/${questionId}/${id}` : `/mark/${examId}/${questionId}`, { state: loc.state });
 
   // Leave this clip, keeping any ticks and typed mark as a draft (a draft never counts as marked)
   async function leaveTo(id: string | null) {
@@ -152,8 +160,8 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     <div className="flex h-full flex-col">
       {/* Header bar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
-        <button onClick={async () => { if (dirty) { try { await saveMutation.mutateAsync(true); } catch { return; } } navigate('/my-exams'); }}
-          className="text-sm text-indigo-600 hover:underline">← Back</button>
+        <button onClick={async () => { if (dirty) { try { await saveMutation.mutateAsync(true); } catch { return; } } navigate(backTarget.to, { state: backTarget.state }); }}
+          className="text-sm font-medium text-indigo-600 hover:underline">← Back to {backTarget.label}</button>
         <div className="font-medium text-slate-700">
           Question {question.question_number} — max {maxMarks} marks
         </div>
