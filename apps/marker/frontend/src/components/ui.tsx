@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { Link, type LinkProps } from 'react-router-dom';
+import { useFromState } from '../lib/nav';
 
 // ── Buttons ─────────────────────────────────────────────────────────────────
 // primary: the one thing you most likely want to do. secondary: a clearly
@@ -28,10 +29,18 @@ export function Button({
   return <button type={type} className={buttonClass(variant, className)} {...props} />;
 }
 
+// Links remember the page they were clicked on so the next page's Back button can return here.
 export function LinkButton({
-  variant = 'secondary', className = '', ...props
+  variant = 'secondary', className = '', state, ...props
 }: LinkProps & { variant?: ButtonVariant }) {
-  return <Link className={buttonClass(variant, className)} {...props} />;
+  const from = useFromState();
+  return <Link className={buttonClass(variant, className)} state={state ?? from} {...props} />;
+}
+
+/** A text link that, like LinkButton, remembers the page it was clicked on. */
+export function AppLink({ state, ...props }: LinkProps) {
+  const from = useFromState();
+  return <Link state={state ?? from} {...props} />;
 }
 
 // ── Exam status ─────────────────────────────────────────────────────────────

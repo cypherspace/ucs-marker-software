@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
 import type { ExamQuestion } from '@marker/shared-types';
 import { DrivePicker, driveConfigured } from '../components/DrivePicker';
 import { UploadQueuePanel } from '../components/UploadQueuePanel';
+import { ScriptUploader } from '../components/ScriptUploader';
 import { QuestionClipper, type ClipperMode, type ClipperResult } from '../components/QuestionClipper';
 import { ClipRunPanel } from '../components/ClipRunPanel';
 import { Button } from '../components/ui';
@@ -33,11 +34,6 @@ export function ExamSetup() {
   const progressByQuestion = new Map((progressQ.data?.data.questions ?? []).map((p) => [p.question_id, p]));
 
   // ── Script upload ─────────────────────────────────────────────────────────
-  // One request per PDF, in name order, so a big or failing file doesn't sink the rest.
-  const scriptQueue = useUploadQueue((file) => api.uploadScripts(id!, [file]), {
-    onDone: () => qc.invalidateQueries({ queryKey: ['scripts', id] }),
-  });
-
   // ── Clipping (a few scripts per request, so a whole class can't hit the request time limit) ──
   const clipRunner = useBatchRunner(3);
   const [clipJob, setClipJob] = useState<{ questionIds?: string[]; finishing: boolean; finished: boolean; error: string | null } | null>(null);
@@ -186,12 +182,8 @@ export function ExamSetup() {
   if (examQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
   return (
-    <div className="p-6 max-w-4xl">
-      <div className="mb-4 flex items-center gap-4">
-        <Link to="/exams" className="text-sm text-indigo-600 hover:underline">← Exams</Link>
-        <h1 className="text-2xl font-semibold text-slate-800">{exam?.name}</h1>
-        <Link to={`/exams/${id}/progress`} className="ml-auto text-sm text-indigo-600 hover:underline">View Progress →</Link>
-      </div>
+    <div>
+      <p className="mb-4 text-sm text-slate-500">Upload the scripts and mark scheme, mark out the questions and choose who marks what.</p>
 
       {/* Tabs */}
       <div className="mb-6 flex gap-0 rounded-lg border border-slate-200 bg-white overflow-hidden w-fit">
@@ -209,37 +201,7 @@ export function ExamSetup() {
       {/* Scripts tab */}
       {tab === 'scripts' && (
         <div className="space-y-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="font-medium text-slate-700 mb-3">Upload Student Scripts</h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Upload one PDF per student. Scripts are automatically assigned student numbers (001, 002, …).
-              Student names are <strong>never</strong> stored alongside the scripts — the system uses numbers only until export.
-            </p>
-            {exam?.use_drive_storage && driveConfigured && (
-              <DrivePicker
-                onPick={scriptQueue.addDrive}
-                disabled={scriptQueue.running}
-                title="Choose script PDFs"
-                buttonLabel="Choose from Google Drive"
-              />
-            )}
-            <label className="mb-3 block text-xs text-slate-500">
-              {exam?.use_drive_storage && driveConfigured ? 'Or upload from this computer' : 'Choose PDFs from this computer'}
-              <input
-                type="file"
-                accept=".pdf"
-                multiple
-                disabled={scriptQueue.running}
-                onChange={(e) => { scriptQueue.addFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }}
-                className="mt-1 block text-sm text-slate-600"
-              />
-            </label>
-            <p className="mb-3 text-xs text-slate-500">Files are numbered in name order, and each PDF can be up to 32 MB.</p>
-            <UploadQueuePanel
-              queue={scriptQueue}
-              buttonLabel={(n) => `Upload ${n} script${n === 1 ? '' : 's'}`}
-            />
-          </div>
+          <ScriptUploader exam={exam} scripts={scripts} />
 
           <div className="rounded-lg border border-slate-200 bg-white p-4">
             <h2 className="font-medium text-slate-700 mb-3">Mark Scheme</h2>
@@ -303,7 +265,7 @@ export function ExamSetup() {
               <div className="max-h-48 overflow-y-auto divide-y divide-slate-100">
                 {scripts.map((s) => (
                   <div key={s.id} className="flex items-center justify-between px-4 py-2 text-sm">
-                    <span className="text-slate-600">Student {s.student_number}</span>
+                    <span className="text-slate-600">Student {s.student_number}{s.class_group ? <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{s.class_group}</span> : null}</span>
                     <span className="text-xs text-slate-400">{new Date(s.uploaded_at).toLocaleDateString()}</span>
                   </div>
                 ))}

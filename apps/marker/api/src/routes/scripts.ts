@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Router, type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
@@ -8,28 +9,32 @@ import { scriptPdfSource } from '../services/scriptSource.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
+import { requireExamMember } from '../services/access.js';
+import { stripTextLayer } from '../services/converted.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-// Upload student scripts for an exam
+// Upload student scripts for an exam. Every PDF in one upload is filed under the class name typed with it
+// (optional), and remembers who uploaded it: a teacher sees the results for the scripts they uploaded.
+// The exam's lead teacher, an admin, or a teacher assigned a question on the exam may upload.
 router.post('/exams/:id/scripts', requireAuth, requireRole(['teacher', 'admin']), upload.array('scripts', 100), async (req, res, next) => {
   try {
+    const access = await requireExamMember(req, res, req.params.id, { markerOrLead: true });
+    if (!access) return;
+    if (access.exam.archived_at) {
+      res.status(409).json({ error: 'This exam is archived. Restore it before adding scripts.', code: 'EXAM_ARCHIVED' }); return;
+    }
     const files = req.files as Express.Multer.File[] | undefined;
     if (!files?.length) {
       res.status(422).json({ error: 'No files uploaded', code: 'NO_FILES' }); return;
     }
-
-    // Optionally accept a CSV mapping: student_number,student_name
-    // For now, auto-assign sequential student numbers if not provided
-    const exam = await db('exams').where({ id: req.params.id }).first();
-    if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return; }
-
-    const existingCount = await db('student_scripts')
-      .where({ exam_id: req.params.id })
-      .count('id as n')
-      .first<{ n: string }>();
-    const startIndex = Number(existingCount?.n ?? 0) + 1;
+    const rawClass = typeof req.body?.class_group === 'string' ? req.body.class_group.trim().replace(/\s+/g, ' ') : '';
+    if (rawClass.length > 50) {
+      res.status(422).json({ error: 'A class name can be at most 50 characters', code: 'CLASS_TOO_LONG' }); return;
+    }
+    const classGroup = rawClass || null;
+    const exam = access.exam;
 
     // Ensure Drive folder exists for this exam
     let driveFolderId: string | null = exam.drive_folder_id ?? null;
@@ -43,27 +48,41 @@ router.post('/exams/:id/scripts', requireAuth, requireRole(['teacher', 'admin'])
     }
 
     const inserted: { id: string; student_number: string }[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const studentNumber = String(startIndex + i).padStart(3, '0');
-      let uri: string;
-      if (exam.use_drive_storage && driveFolderId) {
-        uri = await uploadFile(exam.lead_teacher_id, driveFolderId, `${studentNumber}.pdf`, file.buffer, 'application/pdf');
-      } else {
-        const key = `scripts/${req.params.id}/${studentNumber}.pdf`;
-        uri = await storage.write(key, file.buffer);
+    for (const file of files) {
+      // Student numbers continue across classes and across teachers uploading at the same time, so each
+      // number is claimed under a lock on the exam; the file is stored once the number is safely taken.
+      const row = await db.transaction(async (trx) => {
+        await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [req.params.id]);
+        const top = await trx('student_scripts').where({ exam_id: req.params.id })
+          .select(db.raw("MAX(CASE WHEN student_number ~ '^[0-9]+$' THEN student_number::int END) AS n")).first<{ n: number | null }>();
+        const studentNumber = String((top?.n ?? 0) + 1).padStart(3, '0');
+        const [made] = await trx('student_scripts')
+          .insert({
+            exam_id: req.params.id, student_number: studentNumber, original_pdf_url: '',
+            class_group: classGroup, uploaded_by: req.user!.sub,
+          })
+          .returning(['id', 'student_number']);
+        return made as { id: string; student_number: string };
+      });
+      try {
+        let uri: string;
+        if (exam.use_drive_storage && driveFolderId) {
+          uri = await uploadFile(exam.lead_teacher_id, driveFolderId, `${row.student_number}.pdf`, file.buffer, 'application/pdf');
+        } else {
+          uri = await storage.write(`scripts/${req.params.id}/${row.student_number}.pdf`, file.buffer);
+        }
+        await db('student_scripts').where({ id: row.id }).update({ original_pdf_url: uri });
+      } catch (err) {
+        await db('student_scripts').where({ id: row.id }).del();   // never leave a script with no file
+        throw err;
       }
-      const [row] = await db('student_scripts')
-        .insert({ exam_id: req.params.id, student_number: studentNumber, original_pdf_url: uri })
-        .returning(['id', 'student_number']);
-      inserted.push(row as { id: string; student_number: string });
+      inserted.push(row);
     }
     res.status(201).json({ data: inserted });
   } catch (err) {
     next(err);
   }
 });
-
 // Upload the mark scheme PDF for an exam (one per exam)
 router.post('/exams/:id/mark-scheme', requireAuth, requireRole(['teacher', 'admin']), upload.single('mark_scheme'), async (req, res, next) => {
   try {
@@ -85,8 +104,13 @@ router.post('/exams/:id/mark-scheme', requireAuth, requireRole(['teacher', 'admi
 // List scripts for an exam
 router.get('/exams/:id/scripts', requireAuth, async (req, res, next) => {
   try {
+    const access = await requireExamMember(req, res, req.params.id);
+    if (!access) return;
+    // The lead teacher and admins see every script; other teachers see the ones they uploaded
     const rows = await db('student_scripts')
       .where({ exam_id: req.params.id })
+      .modify((qb) => { if (!access.isLead) qb.where({ uploaded_by: req.user!.sub }); })
+      .select('id', 'exam_id', 'student_number', 'class_group', 'uploaded_at')
       .orderBy('student_number');
     res.json({ data: rows });
   } catch (err) {
@@ -192,6 +216,11 @@ async function loadClipJob(
   return { exam, scripts, questions };
 }
 
+// A fingerprint of what a clip image is cut from, kept on the clip to tell whether re-clipping changes it
+function clipSignature(q: ClipQuestion | undefined): string | null {
+  return q ? createHash('sha1').update(JSON.stringify([q.clip_coordinates ?? [], q.name_zones ?? []])).digest('hex') : null;
+}
+
 // Clip every question for one script. Clips chosen by hand for this script are left alone.
 // `fatal` means every other script would fail the same way (the clipping service is down).
 async function clipOneScript(
@@ -255,9 +284,26 @@ async function clipOneScript(
   }
 
   if (result.clips.length) {
+    const questionById = new Map(todo.map((q) => [q.id, q]));
+    const before = await db('script_clips')
+      .where({ script_id: script.id })
+      .whereIn('question_id', result.clips.map((c) => c.question_id))
+      .select<{ id: string; question_id: string; clip_signature: string | null }[]>('id', 'question_id', 'clip_signature');
     await db('script_clips')
-      .insert(result.clips.map((c) => ({ script_id: c.script_id, question_id: c.question_id, clip_image_url: c.clip_image_url })))
-      .onConflict(['script_id', 'question_id']).merge(['clip_image_url']);
+      .insert(result.clips.map((c) => ({
+        script_id: c.script_id, question_id: c.question_id, clip_image_url: c.clip_image_url,
+        clip_signature: clipSignature(questionById.get(c.question_id)),
+      })))
+      .onConflict(['script_id', 'question_id']).merge(['clip_image_url', 'clip_signature']);
+    // The converted handwriting (and any ticks placed on it) belongs to the old crop. Discard it only
+    // when the regions or name zones really changed, not on every re-run of clipping.
+    const changed = before
+      .filter((b) => b.clip_signature && b.clip_signature !== clipSignature(questionById.get(b.question_id)))
+      .map((b) => b.id);
+    if (changed.length) {
+      await db('script_clips').whereIn('id', changed).update({ ocr_text: null, text_image_url: null });
+      await stripTextLayer(changed);
+    }
   }
   return { made: result.clips.length, kept: manual.size };
 }

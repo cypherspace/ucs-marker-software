@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, HttpError } from './api';
 import { Login } from './pages/Login';
 import { Home } from './pages/Home';
@@ -9,7 +9,10 @@ import { ExamList } from './pages/ExamList';
 import { CreateExam } from './pages/CreateExam';
 import { ExamSetup } from './pages/ExamSetup';
 import { ExamProgress } from './pages/ExamProgress';
-import { MyExams } from './pages/MyExams';
+import { ExamPage } from './pages/ExamPage';
+import { ExamResults } from './pages/ExamResults';
+import { ExamUpload } from './pages/ExamUpload';
+import { AiMarkingOverview, ComparativeOverview, MarkingLayout, MyMarking } from './pages/Marking';
 import { MarkingInterface } from './pages/MarkingInterface';
 import { ComparativeMarking } from './pages/ComparativeMarking';
 import { ComparativeRanking } from './pages/ComparativeRanking';
@@ -69,7 +72,7 @@ export function App() {
         <h1 className="whitespace-nowrap text-lg font-semibold"><Link to="/" className="hover:opacity-90">UCS Marking</Link></h1>
         <nav className="flex flex-wrap gap-x-3 text-sm whitespace-nowrap">
           <NavLink to="/" end className={navCls}>Home</NavLink>
-          <NavLink to="/my-exams" className={navCls}>My Marking</NavLink>
+          <NavLink to="/marking" className={navCls}>Marking</NavLink>
           {isTeacherOrAdmin && <NavLink to="/exams" className={navCls}>Exams</NavLink>}
           {me.role === 'admin' && <NavLink to="/admin" className={navCls}>Admin</NavLink>}
         </nav>
@@ -84,22 +87,41 @@ export function App() {
       <main className="min-h-0 flex-1 overflow-auto">
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/my-exams" element={<MyExams />} />
+          <Route path="/marking" element={<MarkingLayout />}>
+            <Route index element={<MyMarking />} />
+            <Route path="ai" element={<AiMarkingOverview />} />
+            <Route path="comparative" element={<ComparativeOverview />} />
+          </Route>
+          <Route path="/marking/ai/:id" element={<AiMarking />} />
           <Route path="/exams" element={<ExamList />} />
           <Route path="/exams/new" element={<CreateExam />} />
-          <Route path="/exams/:id/setup" element={<ExamSetup />} />
-          <Route path="/exams/:id/progress" element={<ExamProgress />} />
+          <Route path="/exams/:id" element={<ExamPage />}>
+            <Route index element={<ExamProgress />} />
+            <Route path="results" element={<ExamResults />} />
+            <Route path="setup" element={<ExamSetup />} />
+            <Route path="upload" element={<ExamUpload />} />
+          </Route>
+          {/* Addresses used before the exam page and Marking area existed */}
+          <Route path="/my-exams" element={<Navigate to="/marking" replace />} />
+          <Route path="/exams/:id/progress" element={<RedirectTo to={(p) => `/exams/${p.id}`} />} />
+          <Route path="/exams/:id/ai" element={<RedirectTo to={(p) => `/marking/ai/${p.id}`} />} />
           <Route path="/mark/:examId/:questionId" element={<MarkingInterface />} />
           <Route path="/mark/:examId/:questionId/:clipId" element={<MarkingInterface />} />
           <Route path="/compare/:examId/:questionId" element={<ComparativeMarking />} />
           <Route path="/compare/:examId/:questionId/ranking" element={<ComparativeRanking />} />
-          <Route path="/exams/:id/ai" element={<AiMarking />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/login" element={<Login />} />
         </Routes>
       </main>
     </div>
   );
+}
+
+// Send an old address to its new home, keeping the remembered "came from" page
+function RedirectTo({ to }: { to: (params: Record<string, string | undefined>) => string }) {
+  const params = useParams();
+  const loc = useLocation();
+  return <Navigate to={to(params)} replace state={loc.state} />;
 }
 
 function navCls({ isActive }: { isActive: boolean }) {

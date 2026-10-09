@@ -1,42 +1,35 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group } from 'react-konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import useImage from 'use-image';
-import type { Annotation, AnnotationData, AnnotationTool } from '@marker/shared-types';
+import type { Annotation } from '@marker/shared-types';
+import { MARK_COLOR, TOOL_LABELS, TOOLS, type Tool } from './AnnotationToolbar';
+import { findPointAt, isPointType } from '../lib/annotations';
+import { useElementWidth } from '../hooks/useElementWidth';
+import { useCtrlWheelZoom } from '../hooks/useZoom';
 
+// The drawing surface: shows an image with annotations over it. It owns no annotation state,
+// the parent does, so the script and the converted-handwriting view share one set of tools.
 interface Props {
-  clipUrl: string;
-  initialData?: AnnotationData;
-  onChange: (data: AnnotationData) => void;
+  imageUrl: string;
+  /** The annotations to draw on this image */
+  annotations: Annotation[];
+  tool: Tool;
+  color: string;
+  /** Multiple of "fit to the pane's width"; 1 = fit */
+  zoom: number;
+  onZoom: (zoom: number) => void;
+  onTool: (tool: Tool) => void;
+  onAdd: (ann: Annotation) => void;
+  onRemove: (id: string) => void;
+  nextNumber: () => number;
   readOnly?: boolean;
-  // The question's maximum: Mark ticks cannot add up to more than this
+  // Mark ticks on every view added together, against the question's maximum
+  markTickCount: number;
   maxMarkTicks?: number;
 }
 
-type Tool = AnnotationTool | 'erase';
-
-const TOOL_LABELS: Record<Tool, string> = {
-  mark_tick: '+1 Mark tick',
-  tick: '✓ Tick',
-  cross: '✗ Cross',
-  numbered_tick: '#✓ Numbered Tick',
-  numbered_cross: '#✗ Numbered Cross',
-  circle: '○ Circle',
-  underline: '― Underline',
-  ruler: '╱ Ruler',
-  text: 'T Text',
-  erase: '⌫ Erase',
-};
-
-const COLORS = ['#16a34a', '#dc2626', '#2563eb', '#d97706', '#7c3aed', '#000000'];
-
-// Mark ticks always look the same, so they cannot be confused with an ordinary tick
-const MARK_COLOR = '#4f46e5';
-
-// How many marks a set of annotations is worth: one per Mark tick
-export function markTickTotal(data: AnnotationData | null | undefined): number {
-  return (data?.annotations ?? []).filter((a) => a.type === 'mark_tick').length;
-}
+type PointerEvt = KonvaEventObject<MouseEvent | TouchEvent>;
 
 function nanoid() {
   return Math.random().toString(36).slice(2, 10);
@@ -118,12 +111,12 @@ function renderAnnotation(ann: Annotation) {
   }
 }
 
-export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = false, maxMarkTicks }: Props) {
+export function AnnotationCanvas({
+  imageUrl, annotations, tool, color, zoom, onZoom, onTool, onAdd, onRemove, nextNumber,
+  readOnly = false, markTickCount, maxMarkTicks,
+}: Props) {
   const [retry, setRetry] = useState(0);
-  const [image, imageStatus] = useImage(retry ? `${clipUrl}${clipUrl.includes('?') ? '&' : '?'}r=${retry}` : clipUrl, 'anonymous');
-  const [annotations, setAnnotations] = useState<Annotation[]>(initialData?.annotations ?? []);
-  const [tool, setTool] = useState<Tool>('mark_tick');
-  const [color, setColor] = useState(COLORS[0]);
+  const [image, imageStatus] = useImage(retry ? `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}r=${retry}` : imageUrl, 'anonymous');
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [currentPoints, setCurrentPoints] = useState<number[]>([]);
@@ -131,21 +124,18 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
   const [textInput, setTextInput] = useState('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const counterRef = useRef(
-    1 + Math.max(0, ...(initialData?.annotations ?? []).map((a) => a.number ?? 0)),
-  );
-  const stageRef = useRef<{ container: () => HTMLElement } | null>(null);
+  const paneRef = useRef<HTMLDivElement>(null);
 
+  const paneWidth = useElementWidth(paneRef);
   const imgWidth = image?.width ?? 800;
   const imgHeight = image?.height ?? 600;
-  const scale = Math.min(1, 900 / imgWidth);
+  // "Fit" is the pane's width (less the border and a little breathing room), never blown up past 2x
+  const fitScale = paneWidth > 0 ? Math.min(2, Math.max(0.1, (paneWidth - 24) / imgWidth)) : Math.min(1, 900 / imgWidth);
+  const scale = fitScale * zoom;
   const displayW = imgWidth * scale;
   const displayH = imgHeight * scale;
-  const markTicks = annotations.filter((a) => a.type === 'mark_tick').length;
 
-  const notify = useCallback((anns: Annotation[]) => {
-    onChange({ annotations: anns });
-  }, [onChange]);
+  useCtrlWheelZoom(paneRef, zoom, onZoom);
 
   useEffect(() => {
     if (!notice) return;
@@ -153,60 +143,49 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
     return () => clearTimeout(t);
   }, [notice]);
 
-  function addAnnotation(ann: Annotation) {
-    const next = [...annotations, ann];
-    setAnnotations(next);
-    notify(next);
-  }
+  // Close context menu on click outside
+  useEffect(() => {
+    const handler = () => setContextMenu(null);
+    window.addEventListener('click', handler);
+    return () => window.removeEventListener('click', handler);
+  }, []);
 
-  function removeLastAnnotation() {
-    const next = annotations.slice(0, -1);
-    setAnnotations(next);
-    notify(next);
-  }
-
-  function removeById(id: string) {
-    const next = annotations.filter((a) => a.id !== id);
-    setAnnotations(next);
-    notify(next);
-  }
-
-  function getPointer(e: KonvaEventObject<MouseEvent>) {
+  function getPointer(e: PointerEvt) {
     const pos = e.target.getStage()?.getPointerPosition();
     if (!pos) return null;
     return { x: pos.x / scale, y: pos.y / scale };
   }
 
-  function handleDblClick(e: Parameters<typeof getPointer>[0]) {
-    if (readOnly) return;
+  // Ticks, crosses and mark ticks are placed with a double-click (double-tap on a tablet), and a
+  // double-click on one removes it, so a stray click never changes a mark.
+  function handleDblClick(e: PointerEvt) {
+    if (readOnly || !isPointType(tool)) return;
     const pos = getPointer(e);
     if (!pos) return;
-    if (tool === 'tick' || tool === 'numbered_tick') {
-      const ann: Annotation = {
-        id: nanoid(), type: tool, x: pos.x, y: pos.y, color,
-        ...(tool === 'numbered_tick' ? { number: counterRef.current++ } : {}),
-      };
-      addAnnotation(ann);
+    const hit = findPointAt(annotations, pos.x, pos.y);
+    if (hit) {
+      onRemove(hit.id);
+      return;
     }
-  }
-
-  function handleMouseDown(e: Parameters<typeof getPointer>[0]) {
-    if (readOnly) return;
-    const pos = getPointer(e);
-    if (!pos) return;
     if (tool === 'mark_tick') {
-      if (maxMarkTicks !== undefined && markTicks >= maxMarkTicks) {
+      if (maxMarkTicks !== undefined && markTickCount >= maxMarkTicks) {
         setNotice(`This question is only worth ${maxMarkTicks} mark${maxMarkTicks === 1 ? '' : 's'}.`);
         return;
       }
-      addAnnotation({ id: nanoid(), type: 'mark_tick', x: pos.x, y: pos.y, color: MARK_COLOR });
-    } else if (tool === 'cross' || tool === 'numbered_cross') {
-      const ann: Annotation = {
-        id: nanoid(), type: tool, x: pos.x, y: pos.y, color,
-        ...(tool === 'numbered_cross' ? { number: counterRef.current++ } : {}),
-      };
-      addAnnotation(ann);
-    } else if (tool === 'circle') {
+      onAdd({ id: nanoid(), type: 'mark_tick', x: pos.x, y: pos.y, color: MARK_COLOR });
+      return;
+    }
+    onAdd({
+      id: nanoid(), type: tool as Annotation['type'], x: pos.x, y: pos.y, color,
+      ...(tool === 'numbered_tick' || tool === 'numbered_cross' ? { number: nextNumber() } : {}),
+    });
+  }
+
+  function handleMouseDown(e: PointerEvt) {
+    if (readOnly) return;
+    const pos = getPointer(e);
+    if (!pos) return;
+    if (tool === 'circle') {
       setIsDrawing(true);
       setDrawStart(pos);
     } else if (tool === 'underline' || tool === 'ruler') {
@@ -219,7 +198,7 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
     }
   }
 
-  function handleMouseMove(e: Parameters<typeof getPointer>[0]) {
+  function handleMouseMove(e: PointerEvt) {
     if (!isDrawing || readOnly) return;
     const pos = getPointer(e);
     if (!pos || !drawStart) return;
@@ -228,7 +207,7 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
     }
   }
 
-  function handleMouseUp(e: Parameters<typeof getPointer>[0]) {
+  function handleMouseUp(e: PointerEvt) {
     if (!isDrawing || readOnly) return;
     const pos = getPointer(e);
     setIsDrawing(false);
@@ -236,13 +215,13 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
     if (tool === 'circle') {
       const radius = Math.sqrt((pos.x - drawStart.x) ** 2 + (pos.y - drawStart.y) ** 2);
       if (radius > 5) {
-        addAnnotation({ id: nanoid(), type: 'circle', x: drawStart.x, y: drawStart.y, color, radius });
+        onAdd({ id: nanoid(), type: 'circle', x: drawStart.x, y: drawStart.y, color, radius });
       }
     } else if (tool === 'underline' || tool === 'ruler') {
       const points = [drawStart.x, drawStart.y, pos.x, pos.y];
       const dist = Math.sqrt((pos.x - drawStart.x) ** 2 + (pos.y - drawStart.y) ** 2);
       if (dist > 5) {
-        addAnnotation({ id: nanoid(), type: tool, x: drawStart.x, y: drawStart.y, color, points });
+        onAdd({ id: nanoid(), type: tool, x: drawStart.x, y: drawStart.y, color, points });
       }
     }
     setDrawStart(null);
@@ -251,172 +230,106 @@ export function AnnotationCanvas({ clipUrl, initialData, onChange, readOnly = fa
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY });
+    if (!readOnly) setContextMenu({ x: e.clientX, y: e.clientY });
   }
 
   function handleTextSubmit() {
     if (!pendingText || !textInput.trim()) { setPendingText(null); return; }
-    addAnnotation({ id: nanoid(), type: 'text', x: pendingText.x, y: pendingText.y, color, text: textInput.trim() });
+    onAdd({ id: nanoid(), type: 'text', x: pendingText.x, y: pendingText.y, color, text: textInput.trim() });
     setPendingText(null);
     setTextInput('');
   }
 
-  // Close context menu on click outside
-  useEffect(() => {
-    const handler = () => setContextMenu(null);
-    window.addEventListener('click', handler);
-    return () => window.removeEventListener('click', handler);
-  }, []);
-
-  const tools = Object.keys(TOOL_LABELS) as Tool[];
-
   return (
-    <div className="flex h-full min-h-0 gap-4">
-      {/* Toolbar: outside the scrolling script, so the tools are always in view */}
-      {!readOnly && (
-        <div className="flex w-40 flex-shrink-0 flex-col gap-1 overflow-y-auto pr-1">
-          <div className="text-xs font-medium text-slate-500 uppercase tracking-wide">Tool</div>
-          {tools.map((t) => (
-            <button
-              key={t}
-              onClick={() => setTool(t)}
-              className={`rounded px-2 py-1 text-left text-xs font-medium transition-colors ${
-                tool === t
-                  ? 'bg-indigo-600 text-white'
-                  : t === 'mark_tick'
-                    ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-100'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-            >
-              {TOOL_LABELS[t]}
-            </button>
-          ))}
-
-          <div className="mt-2 text-xs font-medium text-slate-500 uppercase tracking-wide">Colour</div>
-          <div className="flex flex-wrap gap-1.5">
-            {COLORS.map((c) => (
-              <button
-                key={c}
-                onClick={() => setColor(c)}
-                aria-label={`Colour ${c}`}
-                style={{ background: c }}
-                className={`h-6 w-6 rounded-full border-2 transition-all ${color === c ? 'border-slate-700 scale-110' : 'border-transparent'}`}
-              />
-            ))}
-          </div>
-
-          <div className="mt-2 border-t border-slate-200 pt-2">
-            <button
-              onClick={removeLastAnnotation}
-              disabled={annotations.length === 0}
-              className="w-full rounded px-2 py-1 text-xs text-slate-600 bg-slate-100 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
-            >
-              Undo last
-            </button>
-          </div>
-
-          <div className="mt-1 text-[11px] leading-tight text-slate-400">
-            <strong>Click</strong> to place a mark tick.<br />
-            <strong>Dbl-click</strong> to place a tick/cross.<br />
-            <strong>Right-click</strong> to change tool.
-          </div>
+    <div className="relative h-full min-w-0 flex-1">
+      {notice && (
+        <div role="status" className="absolute left-2 top-2 z-10 rounded bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800 shadow">
+          {notice}
         </div>
       )}
-
-      {/* Canvas: the script scrolls in its own pane */}
-      <div className="relative min-w-0 flex-1">
-        {notice && (
-          <div role="status" className="absolute left-2 top-2 z-10 rounded bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800 shadow">
-            {notice}
-          </div>
-        )}
-        <div className="h-full overflow-auto" onContextMenu={handleContextMenu}>
+      <div ref={paneRef} className="h-full select-none overflow-auto" onContextMenu={handleContextMenu}>
         {imageStatus === 'failed' && (
           <div role="alert" className="mb-2 flex items-center gap-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            The clip image could not be loaded.
+            The image could not be loaded.
             <button onClick={() => setRetry((n) => n + 1)} className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700">
               Try again
             </button>
           </div>
         )}
-        {imageStatus === 'loading' && <div className="mb-2 text-sm text-slate-500">Loading clip…</div>}
+        {imageStatus === 'loading' && <div className="mb-2 text-sm text-slate-500">Loading…</div>}
         <div className="relative inline-block align-top">
-        <Stage
-          ref={stageRef as Parameters<typeof Stage>[0]['ref']}
-          width={displayW}
-          height={displayH}
-          scaleX={scale}
-          scaleY={scale}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onDblClick={handleDblClick}
-          style={{ cursor: readOnly ? 'default' : tool === 'erase' ? 'not-allowed' : 'crosshair', border: '1px solid #e2e8f0', borderRadius: 4 }}
-        >
-          <Layer>
-            {image && <KonvaImage image={image} x={0} y={0} width={imgWidth} height={imgHeight} />}
-            {annotations.map((ann) => (
-              <Group
-                key={ann.id}
-                onMouseDown={!readOnly && tool === 'erase' ? (e) => { e.cancelBubble = true; removeById(ann.id); } : undefined}
-              >
-                {renderAnnotation(ann)}
-              </Group>
-            ))}
-            {/* Live preview while drawing */}
-            {isDrawing && (tool === 'underline' || tool === 'ruler') && currentPoints.length === 4 && (
-              <Line points={currentPoints} stroke={color} strokeWidth={tool === 'ruler' ? 1.5 : 3}
-                dash={tool === 'ruler' ? [6, 3] : undefined} lineCap="round" opacity={0.6} />
-            )}
-            {isDrawing && tool === 'circle' && drawStart && currentPoints.length === 0 && (
-              <Circle x={drawStart.x} y={drawStart.y} radius={20} stroke={color} strokeWidth={2.5} fill="transparent" opacity={0.4} />
-            )}
-          </Layer>
-        </Stage>
-
-        {/* Text input overlay */}
-        {pendingText && (
-          <div
-            className="absolute"
-            style={{ left: pendingText.x * scale, top: pendingText.y * scale, zIndex: 10 }}
+          <Stage
+            width={displayW}
+            height={displayH}
+            scaleX={scale}
+            scaleY={scale}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onDblClick={handleDblClick}
+            onDblTap={handleDblClick}
+            style={{ cursor: readOnly ? 'default' : tool === 'erase' ? 'not-allowed' : 'crosshair', border: '1px solid #e2e8f0', borderRadius: 4 }}
           >
-            <input
-              autoFocus
-              value={textInput}
-              onChange={(e) => setTextInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleTextSubmit();
-                if (e.key === 'Escape') setPendingText(null);
-              }}
-              onBlur={handleTextSubmit}
-              className="rounded border border-indigo-400 bg-white px-1 py-0.5 text-sm shadow focus:outline-none"
-              placeholder="Type annotation…"
-            />
-          </div>
-        )}
-        </div>
+            <Layer>
+              {image && <KonvaImage image={image} x={0} y={0} width={imgWidth} height={imgHeight} />}
+              {annotations.map((ann) => (
+                <Group
+                  key={ann.id}
+                  onMouseDown={!readOnly && tool === 'erase' ? (e) => { e.cancelBubble = true; onRemove(ann.id); } : undefined}
+                >
+                  {renderAnnotation(ann)}
+                </Group>
+              ))}
+              {/* Live preview while drawing */}
+              {isDrawing && (tool === 'underline' || tool === 'ruler') && currentPoints.length === 4 && (
+                <Line points={currentPoints} stroke={color} strokeWidth={tool === 'ruler' ? 1.5 : 3}
+                  dash={tool === 'ruler' ? [6, 3] : undefined} lineCap="round" opacity={0.6} />
+              )}
+              {isDrawing && tool === 'circle' && drawStart && currentPoints.length === 0 && (
+                <Circle x={drawStart.x} y={drawStart.y} radius={20} stroke={color} strokeWidth={2.5} fill="transparent" opacity={0.4} />
+              )}
+            </Layer>
+          </Stage>
 
-        {/* Context menu */}
-        {contextMenu && !readOnly && (
-          <div
-            className="fixed z-50 rounded-lg border border-slate-200 bg-white py-1 shadow-lg text-sm"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-3 py-1 text-xs font-medium text-slate-400 uppercase">Switch tool</div>
-            {tools.map((t) => (
-              <button
-                key={t}
-                onClick={() => { setTool(t); setContextMenu(null); }}
-                className={`block w-full px-4 py-1.5 text-left hover:bg-slate-50 ${tool === t ? 'text-indigo-600 font-medium' : 'text-slate-700'}`}
-              >
-                {TOOL_LABELS[t]}
-              </button>
-            ))}
-          </div>
-        )}
+          {/* Text input overlay */}
+          {pendingText && (
+            <div className="absolute" style={{ left: pendingText.x * scale, top: pendingText.y * scale, zIndex: 10 }}>
+              <input
+                autoFocus
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleTextSubmit();
+                  if (e.key === 'Escape') setPendingText(null);
+                }}
+                onBlur={handleTextSubmit}
+                className="rounded border border-indigo-400 bg-white px-1 py-0.5 text-sm shadow focus:outline-none"
+                placeholder="Type annotation…"
+              />
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Context menu */}
+      {contextMenu && !readOnly && (
+        <div
+          className="fixed z-50 rounded-lg border border-slate-200 bg-white py-1 text-sm shadow-lg"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1 text-xs font-medium uppercase text-slate-400">Switch tool</div>
+          {TOOLS.map((t) => (
+            <button
+              key={t}
+              onClick={() => { onTool(t); setContextMenu(null); }}
+              className={`block w-full px-4 py-1.5 text-left hover:bg-slate-50 ${tool === t ? 'font-medium text-indigo-600' : 'text-slate-700'}`}
+            >
+              {TOOL_LABELS[t]}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,9 @@ import { db } from '../db.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { createExamFolder } from '../services/drive.js';
 import { recordAudit } from '../services/audit.js';
+import { storage } from '../services/storage.js';
+import { isDriveUri } from '../services/drive.js';
+import { requireExamMember } from '../services/access.js';
 
 const router = Router();
 
@@ -25,24 +28,28 @@ const CreateExamSchema = z.object({
 
 const UpdateExamSchema = CreateExamSchema.partial();
 
-// List exams (lead teachers see exams they created; other teachers see exams they're assigned to)
+// List exams (lead teachers see exams they created; other teachers see exams they're assigned to).
+// ?archived=archived lists only archived exams, ?archived=all lists both; the default is active exams only.
 router.get('/', requireAuth, async (req, res, next) => {
   try {
     const userId = req.user!.sub;
     const role = req.user!.role;
+    const which = req.query.archived === 'archived' || req.query.archived === 'all' ? req.query.archived : 'active';
 
-    let rows;
-    if (role === 'admin') {
-      rows = await db('exams').orderBy('created_at', 'desc');
-    } else {
-      // Teachers see exams where they are lead OR assigned
-      rows = await db('exams')
-        .leftJoin('marking_assignments as ma', 'ma.exam_id', 'exams.id')
-        .where('exams.lead_teacher_id', userId)
-        .orWhere('ma.teacher_id', userId)
-        .distinct('exams.*')
-        .orderBy('exams.created_at', 'desc');
-    }
+    const rows = await db('exams')
+      .modify((qb) => {
+        if (role !== 'admin') {
+          // Teachers see exams where they are lead OR assigned
+          qb.whereIn('exams.id', db('exams as e')
+            .leftJoin('marking_assignments as ma', 'ma.exam_id', 'e.id')
+            .where((w) => { w.where('e.lead_teacher_id', userId).orWhere('ma.teacher_id', userId); })
+            .select('e.id'));
+        }
+        if (which === 'active') qb.whereNull('exams.archived_at');
+        if (which === 'archived') qb.whereNotNull('exams.archived_at');
+      })
+      .select('exams.*')
+      .orderBy('exams.created_at', 'desc');
     // Per-exam clip counts for the progress bars on the exam list (one grouped query).
     const ids = rows.map((r: { id: string }) => r.id);
     const stats = ids.length
@@ -72,6 +79,7 @@ router.get('/', requireAuth, async (req, res, next) => {
 // Get single exam
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireExamMember(req, res, req.params.id))) return;
     const exam = await db('exams').where({ id: req.params.id }).first();
     if (!exam) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
     res.json({ data: exam });
@@ -137,6 +145,7 @@ router.patch('/:id', requireAuth, requireRole(['teacher', 'admin']), async (req,
 // List questions for an exam
 router.get('/:id/questions', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireExamMember(req, res, req.params.id))) return;
     const rows = await db('exam_questions')
       .where({ exam_id: req.params.id })
       .orderBy('question_number');
@@ -317,6 +326,7 @@ router.delete('/:examId/questions/:questionId', requireAuth, requireRole(['teach
 // Get marking assignments for exam
 router.get('/:id/assignments', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireExamMember(req, res, req.params.id))) return;
     const rows = await db('marking_assignments as ma')
       .join('users as u', 'u.id', 'ma.teacher_id')
       .join('exam_questions as eq', 'eq.id', 'ma.question_id')
@@ -367,6 +377,7 @@ router.delete('/:id/assignments', requireAuth, requireRole(['teacher', 'admin'])
 // AI marks are counted separately, and "covered" means any mark counts (human, else AI).
 router.get('/:id/progress', requireAuth, async (req, res, next) => {
   try {
+    if (!(await requireExamMember(req, res, req.params.id))) return;
     const questions = (await db.raw(
       `SELECT eq.id AS question_id, eq.question_number, eq.max_marks, eq.marking_mode,
               COUNT(sc.id) AS total_clips,
@@ -426,6 +437,117 @@ router.get('/:id/progress', requireAuth, async (req, res, next) => {
         })),
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Archive and delete ───────────────────────────────────────────────────────
+// Archiving is reversible: the exam leaves the lists and marking stops, but nothing is lost. Deleting is
+// permanent, so it needs the exam to be archived first (or to have no marks), and the name typed to confirm.
+interface DeleteFacts {
+  name: string;
+  archived: boolean;
+  questions: number;
+  scripts: number;
+  clips: number;
+  marks: number;
+  uris: string[];
+  drive_files: boolean;
+}
+
+async function deleteFacts(examId: string): Promise<DeleteFacts | null> {
+  const exam = await db('exams').where({ id: examId })
+    .first<{ name: string; archived_at: string | null; mark_scheme_pdf_url: string | null }>('name', 'archived_at', 'mark_scheme_pdf_url');
+  if (!exam) return null;
+  const scripts = await db('student_scripts').where({ exam_id: examId }).select<{ original_pdf_url: string }[]>('original_pdf_url');
+  const clips = await db('script_clips as sc').join('exam_questions as eq', 'eq.id', 'sc.question_id').where('eq.exam_id', examId)
+    .select<{ clip_image_url: string; text_image_url: string | null }[]>('sc.clip_image_url', 'sc.text_image_url');
+  const questions = await db('exam_questions').where({ exam_id: examId }).select<{ ms_clip_image_url: string | null }[]>('ms_clip_image_url');
+  const marks = await db('script_marks as sm').join('script_clips as sc', 'sc.id', 'sm.clip_id')
+    .join('exam_questions as eq', 'eq.id', 'sc.question_id')
+    .where({ 'eq.exam_id': examId, 'sm.mark_source': 'human' }).whereNot('sm.status', 'pending')
+    .count('sm.id as n').first<{ n: string }>();
+
+  const all = [
+    exam.mark_scheme_pdf_url,
+    ...scripts.map((s) => s.original_pdf_url),
+    ...clips.flatMap((c) => [c.clip_image_url, c.text_image_url]),
+    ...questions.map((q) => q.ms_clip_image_url),
+  ].filter((u): u is string => Boolean(u));
+  return {
+    name: exam.name,
+    archived: Boolean(exam.archived_at),
+    questions: questions.length,
+    scripts: scripts.length,
+    clips: clips.length,
+    marks: Number(marks?.n ?? 0),
+    // Files kept in the lead teacher's own Drive are left there: they belong to that teacher
+    uris: all.filter((u) => !isDriveUri(u) && !/^https?:/i.test(u)),
+    drive_files: all.some(isDriveUri),
+  };
+}
+
+router.post('/:id/archive', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    if (!(await requireExamEditor(req, res, req.params.id))) return;
+    await db('exams').where({ id: req.params.id }).whereNull('archived_at').update({ archived_at: db.fn.now() });
+    await recordAudit(req, 'exam.archived', 'exam', req.params.id, {});
+    res.json({ data: await db('exams').where({ id: req.params.id }).first() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/restore', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    if (!(await requireExamEditor(req, res, req.params.id))) return;
+    await db('exams').where({ id: req.params.id }).update({ archived_at: null });
+    await recordAudit(req, 'exam.restored', 'exam', req.params.id, {});
+    res.json({ data: await db('exams').where({ id: req.params.id }).first() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// What deleting would remove, for the confirmation box
+router.get('/:id/delete-preview', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    if (!(await requireExamEditor(req, res, req.params.id))) return;
+    const facts = await deleteFacts(req.params.id);
+    if (!facts) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
+    const { uris: _uris, ...shown } = facts;
+    res.json({ data: { ...shown, allowed: facts.archived || facts.marks === 0 } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/:id', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    if (!(await requireExamEditor(req, res, req.params.id))) return;
+    const { name } = z.object({ name: z.string() }).parse(req.body ?? {});
+    const facts = await deleteFacts(req.params.id);
+    if (!facts) { res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' }); return; }
+    if (!facts.archived && facts.marks > 0) {
+      res.status(409).json({ error: 'Archive this exam first. An exam that has marks can only be deleted once it is archived.', code: 'ARCHIVE_FIRST' }); return;
+    }
+    if (name !== facts.name) {
+      res.status(422).json({ error: 'The name typed does not match this exam, so nothing was deleted.', code: 'NAME_MISMATCH' }); return;
+    }
+
+    await recordAudit(req, 'exam.deleted', 'exam', req.params.id, {
+      name: facts.name, questions: facts.questions, scripts: facts.scripts, clips: facts.clips, marks: facts.marks,
+    });
+    // Questions, assignments, scripts, clips, marks and comparisons all cascade from the exam
+    await db('exams').where({ id: req.params.id }).del();
+
+    // Then the stored files. A failure here leaves an orphaned file, never a half-deleted exam.
+    const failed = (await Promise.allSettled(facts.uris.map((u) => storage.delete(u))))
+      .filter((r) => r.status === 'rejected').length;
+    if (failed) console.warn(`[exam.delete] ${failed} stored file(s) could not be removed for exam ${req.params.id}`);
+
+    res.json({ data: { deleted: true, drive_files_left: facts.drive_files } });
   } catch (err) {
     next(err);
   }

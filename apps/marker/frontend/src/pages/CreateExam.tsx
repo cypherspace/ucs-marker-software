@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
+import { PageHeader } from '../components/PageHeader';
+import { useBackTarget } from '../lib/nav';
 
 export function CreateExam() {
   const navigate = useNavigate();
+  const backTarget = useBackTarget({ to: '/exams', label: 'Exams' });
   const qc = useQueryClient();
   const [form, setForm] = useState({
     name: '',
@@ -41,7 +44,12 @@ export function CreateExam() {
 
   return (
     <div className="p-6 max-w-lg">
-      <h1 className="mb-6 text-2xl font-semibold text-slate-800">New Exam</h1>
+      <PageHeader
+        title="New exam"
+        crumbs={[{ label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' }, { label: 'New exam' }]}
+        back={{ to: '/exams', label: 'Exams' }}
+        subtitle="Give the paper a name. You'll upload the scripts and mark out the questions next."
+      />
       <form
         onSubmit={(e) => { e.preventDefault(); mutation.mutate(); }}
         className="space-y-4 rounded-lg border border-slate-200 bg-white p-6"
@@ -108,7 +116,7 @@ export function CreateExam() {
           </button>
           <button
             type="button"
-            onClick={() => navigate('/exams')}
+            onClick={() => navigate(backTarget.to, { state: backTarget.state })}
             className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
           >
             Cancel

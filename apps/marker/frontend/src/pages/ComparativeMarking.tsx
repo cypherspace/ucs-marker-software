@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
 import { Button, Card, LinkButton, ProgressBar } from '../components/ui';
+import { PageHeader } from '../components/PageHeader';
+import { useBackTarget } from '../lib/nav';
 
 function ClipImage({ clipId, label }: { clipId: string; label: string }) {
   const [failed, setFailed] = useState(false);
@@ -22,6 +24,7 @@ export function ComparativeMarking() {
   const { examId, questionId } = useParams<{ examId: string; questionId: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const backTarget = useBackTarget({ to: '/marking', label: 'Marking' });
 
   const meQ = useQuery({ queryKey: ['auth', 'me'], queryFn: () => api.me() });
   const examQ = useQuery({ queryKey: ['exam', examId], queryFn: () => api.getExam(examId!) });
@@ -97,11 +100,12 @@ export function ComparativeMarking() {
     const chosen = Math.min(max, Math.max(1, Number(wanted || Math.min(20, available) || 1)));
     return (
       <div className="mx-auto max-w-xl p-4 sm:p-6">
-        <Link to="/" className="text-sm text-indigo-600 hover:underline">← Home</Link>
-        <h1 className="mb-1 mt-2 text-2xl font-semibold text-slate-800">Comparative marking</h1>
-        <p className="mb-5 text-sm text-slate-500">
-          For each pair of anonymous responses, pick the better one. The ranking is built from all the comparisons.
-        </p>
+        <PageHeader
+          title="Comparative marking"
+          crumbs={[{ label: 'Home', to: '/' }, { label: 'Marking', to: '/marking' }, { label: 'Comparisons' }]}
+          back={{ to: '/marking', label: 'Marking' }}
+          subtitle="For each pair of anonymous responses, pick the better one. The ranking is built from all the comparisons."
+        />
         <Card className="space-y-4 p-5">
           {status.marking_mode !== 'comparative' ? (
             <p className="text-sm text-slate-600">This question is marked with marks, not by comparison.</p>
@@ -162,7 +166,7 @@ export function ComparativeMarking() {
         <div className="flex flex-wrap justify-center gap-2">
           <Button variant="secondary" onClick={finish}>Back to start</Button>
           {isLead && <LinkButton to={`/compare/${examId}/${questionId}/ranking`} variant="primary">See the ranking</LinkButton>}
-          <Button variant="secondary" onClick={() => navigate('/')}>Home</Button>
+          <Button variant="secondary" onClick={() => navigate(backTarget.to, { state: backTarget.state })}>Back to {backTarget.label}</Button>
         </div>
       </div>
     );

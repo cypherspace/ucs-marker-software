@@ -1,64 +1,26 @@
-import { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
-import { useParams, Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { useOutletContext, useParams } from 'react-router-dom';
 import { api } from '../api';
-import { Button, Card, LinkButton, ProgressBar } from '../components/ui';
+import { AppLink, Card, LinkButton, ProgressBar } from '../components/ui';
 
 export function ExamProgress() {
   const { id } = useParams<{ id: string }>();
-  const [exportMsg, setExportMsg] = useState<string | null>(null);
-
-  const examQ = useQuery({ queryKey: ['exam', id], queryFn: () => api.getExam(id!) });
+  const { isLead } = useOutletContext<{ isLead: boolean }>();
   const progressQ = useQuery({ queryKey: ['progress', id], queryFn: () => api.getProgress(id!) });
 
-  const exportMutation = useMutation({
-    mutationFn: (includeNames: boolean) => api.exportResults(id!, includeNames),
-    onSuccess: (res, includeNames) => {
-      if (res.data.driveUrl) {
-        setExportMsg('Exported to Google Drive.');
-        window.open(res.data.driveUrl, '_blank', 'noopener');
-      } else if (res.data.csv) {
-        const blob = new Blob([res.data.csv], { type: 'text/csv' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `results${includeNames ? '-named' : ''}.csv`;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        setExportMsg('CSV downloaded.');
-      }
-    },
-    onError: (e) => setExportMsg((e as Error).message),
-  });
+  if (progressQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
-  if (examQ.isLoading || progressQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
-
-  const exam = examQ.data?.data;
   const progress = progressQ.data?.data;
 
   return (
-    <div className="max-w-4xl p-4 sm:p-6">
-      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <Link to="/exams" className="text-sm text-indigo-600 hover:underline">← Exams</Link>
-        <h1 className="text-2xl font-semibold text-slate-800">{exam?.name}</h1>
+    <div>
+      <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <p className="text-sm text-slate-500">How far marking has got for each question.</p>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <LinkButton to={`/exams/${id}/ai`} variant="secondary">AI marking</LinkButton>
-          <Button
-            onClick={() => { setExportMsg(null); exportMutation.mutate(false); }}
-            disabled={exportMutation.isPending}
-          >
-            {exportMutation.isPending ? 'Exporting…' : 'Export results'}
-          </Button>
-          <Button
-            onClick={() => { setExportMsg(null); exportMutation.mutate(true); }}
-            disabled={exportMutation.isPending}
-            title="Adds student names via a database join. Names never leave the platform otherwise."
-          >
-            Export with names
-          </Button>
+          <LinkButton to={`/exams/${id}/results`} variant="secondary">Results and export</LinkButton>
+          {isLead && <LinkButton to={`/marking/ai/${id}`} variant="secondary">AI marking</LinkButton>}
         </div>
       </div>
-      {exportMsg && <p role="status" className="mb-4 text-sm text-slate-600">{exportMsg}</p>}
-
       <div className="space-y-4">
         {progress?.questions.map((q) => {
           const comparative = q.marking_mode === 'comparative';
@@ -114,7 +76,8 @@ export function ExamProgress() {
         })}
         {!progress?.questions.length && (
           <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
-            No questions defined yet. <Link to={`/exams/${id}/setup`} className="text-indigo-600 hover:underline">Go to setup →</Link>
+            No questions defined yet.{' '}
+            {isLead && <AppLink to={`/exams/${id}/setup`} className="text-indigo-600 hover:underline">Go to setup</AppLink>}
           </div>
         )}
       </div>

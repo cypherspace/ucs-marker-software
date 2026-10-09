@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
+import { PageHeader } from '../components/PageHeader';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Button, Card, ProgressBar } from '../components/ui';
@@ -20,13 +21,15 @@ const signed = (n: number) => (n > 0 ? `+${n}` : String(n));
 
 export function AiMarking() {
   const { id: examId } = useParams<{ id: string }>();
+  const [search] = useSearchParams();
   const qc = useQueryClient();
 
   const examQ = useQuery({ queryKey: ['exam', examId], queryFn: () => api.getExam(examId!) });
   const questionsQ = useQuery({ queryKey: ['questions', examId], queryFn: () => api.listQuestions(examId!) });
   const aiQ = useQuery({ queryKey: ['ai-status'], queryFn: () => api.aiStatus() });
 
-  const [questionId, setQuestionId] = useState('');
+  // ?q= opens the page on a particular question (from the AI marking overview)
+  const [questionId, setQuestionId] = useState(search.get('q') ?? '');
   const [scope, setScope] = useState<AiScopeType>('unmarked');
   const [sampleCount, setSampleCount] = useState(10);
   const [mode, setMode] = useState<AiMode>('marks');
@@ -84,12 +87,15 @@ export function AiMarking() {
 
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
-      <Link to={`/exams/${examId}/progress`} className="text-sm text-indigo-600 hover:underline">← Progress</Link>
-      <h1 className="mb-1 mt-2 text-2xl font-semibold text-slate-800">AI marking: {examQ.data?.data.name}</h1>
-      <p className="mb-5 text-sm text-slate-500">
-        AI marks sit alongside teachers' marks and never replace them: where a teacher has marked a clip, their mark counts.
-        Only the clipped answers go to Gemini, with names blacked out.
-      </p>
+      <PageHeader
+        title={`AI marking: ${examQ.data?.data.name ?? ''}`}
+        crumbs={[
+          { label: 'Home', to: '/' }, { label: 'Marking', to: '/marking' }, { label: 'AI marking', to: '/marking/ai' },
+          { label: examQ.data?.data.name ?? 'Exam' },
+        ]}
+        back={{ to: '/marking/ai', label: 'AI marking' }}
+        subtitle="Gemini suggests a mark and feedback for each answer you choose. Suggestions appear beside your marks; where you have marked an answer yourself, your mark is the one used. Only the clipped answers are sent, with names blacked out."
+      />
 
       {!configured && (
         <Card className="mb-5 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900" >

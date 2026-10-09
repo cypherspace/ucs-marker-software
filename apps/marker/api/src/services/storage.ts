@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { Storage as GcsClient, type Bucket } from '@google-cloud/storage';
 import { config } from '../config.js';
@@ -6,6 +6,8 @@ import { config } from '../config.js';
 export interface Storage {
   write(key: string, data: Buffer | Uint8Array): Promise<string>;
   read(uri: string): Promise<Buffer>;
+  /** Remove a stored file. A file that is already gone is not an error. */
+  delete(uri: string): Promise<void>;
   publicUrl(uri: string, ttlSeconds?: number): Promise<string>;
   rawUri(uri: string): string;
 }
@@ -22,6 +24,10 @@ class LocalStorage implements Storage {
 
   async read(uri: string): Promise<Buffer> {
     return readFile(uri);
+  }
+
+  async delete(uri: string): Promise<void> {
+    try { await unlink(uri); } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; }
   }
 
   async publicUrl(uri: string): Promise<string> {
@@ -57,6 +63,10 @@ class GcsStorage implements Storage {
     const key = this.keyFromUri(uri);
     const [buf] = await this.bucket.file(key).download();
     return buf;
+  }
+
+  async delete(uri: string): Promise<void> {
+    await this.bucket.file(this.keyFromUri(uri)).delete({ ignoreNotFound: true });
   }
 
   async publicUrl(uri: string, ttlSeconds = 3600): Promise<string> {

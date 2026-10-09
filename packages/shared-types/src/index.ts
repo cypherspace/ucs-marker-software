@@ -37,6 +37,8 @@ export interface Exam {
   mark_scheme_pdf_url: string | null;
   use_drive_storage: boolean;
   drive_folder_id: string | null;
+  // Set when the exam has been archived: it leaves the lists and marking stops, but nothing is lost
+  archived_at?: string | null;
   created_at: string;
   // Present on the exam list only
   clips_total?: number;
@@ -54,6 +56,25 @@ export interface ClipRegion {
 
 // Name zones to black out before any AI processing
 export interface NameZone extends ClipRegion {}
+
+// A question as listed for the teacher marking it: how many clips it has and how many they still have to finish
+// What deleting an exam would remove, shown in the confirmation box
+export interface ExamDeletePreview {
+  name: string;
+  archived: boolean;
+  questions: number;
+  scripts: number;
+  clips: number;
+  marks: number;
+  drive_files: boolean;
+  // Allowed once the exam is archived, or while it has no marks
+  allowed: boolean;
+}
+
+export interface AssignedQuestion extends ExamQuestion {
+  clips_total: number;
+  clips_left: number;
+}
 
 export interface ExamQuestion {
   id: string;
@@ -75,9 +96,9 @@ export type MarkingMode = 'marks' | 'comparative';
 export interface StudentScript {
   id: string;
   exam_id: string;
-  student_id: string | null;
   student_number: string;
-  original_pdf_url: string;
+  // The class this script was uploaded under, if one was given
+  class_group: string | null;
   uploaded_at: string;
 }
 
@@ -115,9 +136,14 @@ export type AnnotationTool =
   // A tick that is worth one mark: the Marks box is the number of these (unless overridden)
   | 'mark_tick';
 
+// Which picture an annotation sits on: the clipped script image (the default) or the
+// converted-handwriting page. Mark ticks on either layer count towards the same total.
+export type AnnotationLayer = 'clip' | 'text';
+
 export interface Annotation {
   id: string;
   type: AnnotationTool;
+  layer?: AnnotationLayer;
   x: number;
   y: number;
   color: string;
@@ -182,6 +208,8 @@ export interface QueueClip {
   my_mark: { marks_awarded: number | null; annotation_data: AnnotationData | null; status: MarkStatus } | null;
   ai_mark: { marks_awarded: number | null; reasoning: string | null; feedback: string | null; model: string | null } | null;
   ocr_text: string | null;
+  // Same-origin URL of the saved converted-handwriting page, once the clip has been converted
+  converted_url: string | null;
 }
 
 // ─── Comparative marking ─────────────────────────────────────────────────────
@@ -403,4 +431,48 @@ export interface Ranking {
   ranked: RankedClip[];
   judged_pairs: number;
   total_pairs: number;
+}
+
+// ─── Results ──────────────────────────────────────────────────────────────────
+export interface ResultsQuestion {
+  id: string;
+  question_number: string;
+  max_marks: number;
+  marking_mode: MarkingMode;
+}
+
+// The mark that counts for one answer (a teacher's, else the AI's), and the AI's own mark beside it
+export interface ResultsCell {
+  marks: number | null;
+  source: MarkSource | null;
+  ai_marks: number | null;
+}
+
+export interface ResultsRow {
+  script_id: string;
+  student_number: string;
+  class_group: string | null;
+  // Only the answers this person may see
+  cells: Record<string, ResultsCell>;
+  // Marks and the possible marks across the answers marked so far
+  total: number;
+  possible: number;
+}
+
+export interface ResultsQuestionStats {
+  question_id: string;
+  scripts: number;
+  marked: number;
+  mean: number | null;
+  min: number | null;
+  max: number | null;
+}
+
+export interface ExamResults {
+  // 'all' for the lead teacher and admins; 'limited' for teachers who see their own classes and questions
+  scope: 'all' | 'limited';
+  classes: { name: string | null; scripts: number }[];
+  questions: ResultsQuestion[];
+  rows: ResultsRow[];
+  stats: ResultsQuestionStats[];
 }

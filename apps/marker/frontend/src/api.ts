@@ -1,5 +1,5 @@
 import type {
-  ApiSuccess, AuthMe, Exam, ExamQuestion, StudentScript, ScriptClip,
+  ApiSuccess, AssignedQuestion, AuthMe, Exam, ExamDeletePreview, ExamQuestion, ExamResults, StudentScript, ScriptClip,
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
@@ -44,7 +44,17 @@ export const api = {
   home: () => http<ApiSuccess<HomeSummary>>(`${A}/home`),
 
   // Exams
-  listExams: () => http<ApiSuccess<Exam[]>>(`${A}/`),
+  listExams: (which: 'active' | 'archived' | 'all' = 'active') =>
+    http<ApiSuccess<Exam[]>>(which === 'active' ? `${A}/` : `${A}/?archived=${which}`),
+  archiveExam: (id: string) => http<ApiSuccess<Exam>>(`${A}/${id}/archive`, { method: 'POST' }),
+  restoreExam: (id: string) => http<ApiSuccess<Exam>>(`${A}/${id}/restore`, { method: 'POST' }),
+  deletePreview: (id: string) => http<ApiSuccess<ExamDeletePreview>>(`${A}/${id}/delete-preview`),
+  deleteExam: (id: string, name: string) =>
+    http<ApiSuccess<{ deleted: boolean; drive_files_left: boolean }>>(`${A}/${id}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
   getExam: (id: string) => http<ApiSuccess<Exam>>(`${A}/${id}`),
   createExam: (body: Partial<Exam>) =>
     http<ApiSuccess<Exam>>(`${A}/`, {
@@ -78,8 +88,10 @@ export const api = {
 
   // Scripts
   listScripts: (examId: string) => http<ApiSuccess<StudentScript[]>>(`${A}/exams/${examId}/scripts`),
-  uploadScripts: async (examId: string, files: File[]) => {
+  // classGroup: the class these scripts belong to (optional); every file in the call is filed under it
+  uploadScripts: async (examId: string, files: File[], classGroup?: string) => {
     const form = new FormData();
+    if (classGroup?.trim()) form.append('class_group', classGroup.trim());
     files.forEach((f) => form.append('scripts', f));
     return http<ApiSuccess<{ id: string; student_number: string }[]>>(`${A}/exams/${examId}/scripts`, {
       method: 'POST',
@@ -180,7 +192,7 @@ export const api = {
   getProgress: (examId: string) => http<ApiSuccess<ExamProgress>>(`${A}/${examId}/progress`),
 
   // Marking
-  myExams: () => http<ApiSuccess<(Exam & { assigned_questions: ExamQuestion[] })[]>>(`${A}/my-exams`),
+  myExams: () => http<ApiSuccess<(Exam & { assigned_questions: AssignedQuestion[] })[]>>(`${A}/my-exams`),
   // The clip asked for, or the first one this teacher hasn't finished
   getNextClip: (examId: string, questionId: string, clipId?: string) =>
     http<ApiSuccess<QueueClip | null>>(
@@ -242,13 +254,27 @@ export const api = {
       }),
 
   // Export
-  exportResults: (examId: string, includeNames?: boolean) =>
-    http<ApiSuccess<{ driveUrl?: string; csv?: string }>>(`${A}/exams/${examId}/export${includeNames ? '?names=1' : ''}`),
+  exportResults: (examId: string, opts: { names?: boolean; classGroup?: string | null } = {}) => {
+    // classGroup: a class name, null for scripts with no class, undefined for everything
+    const q = new URLSearchParams();
+    if (opts.names) q.set('names', '1');
+    if (opts.classGroup === null) q.set('no_class', '1');
+    else if (opts.classGroup) q.set('class', opts.classGroup);
+    const qs = q.toString();
+    return http<ApiSuccess<{ driveUrl?: string; csv?: string; filename?: string }>>(`${A}/exams/${examId}/export${qs ? `?${qs}` : ''}`);
+  },
+  getResults: (examId: string, classGroup?: string | null) => {
+    const q = new URLSearchParams();
+    if (classGroup === null) q.set('no_class', '1');
+    else if (classGroup) q.set('class', classGroup);
+    const qs = q.toString();
+    return http<ApiSuccess<ExamResults>>(`${A}/exams/${examId}/results${qs ? `?${qs}` : ''}`);
+  },
 
   // AI
   aiStatus: () => http<ApiSuccess<{ configured: boolean; model: string }>>(`${A}/ai/status`),
   runOcr: (clipId: string, refresh = false) =>
-    http<ApiSuccess<{ ocr_text: string; cached: boolean }>>(`${A}/clips/${clipId}/ocr${refresh ? '?refresh=1' : ''}`, { method: 'POST' }),
+    http<ApiSuccess<{ ocr_text: string; converted_url: string; cached: boolean }>>(`${A}/clips/${clipId}/ocr${refresh ? '?refresh=1' : ''}`, { method: 'POST' }),
   aiPlan: (examId: string, settings: AiSettings, scope: { type: AiScopeType; count?: number }) =>
     http<ApiSuccess<AiPlan>>(`${A}/exams/${examId}/ai-mark/plan`, {
       method: 'POST',

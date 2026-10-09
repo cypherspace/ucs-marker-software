@@ -1,17 +1,28 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useBackTarget } from '../lib/nav';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
-import { AnnotationCanvas, markTickTotal } from '../components/AnnotationCanvas';
+import { AnnotationCanvas } from '../components/AnnotationCanvas';
+import { AnnotationToolbar, COLORS, type Tool } from '../components/AnnotationToolbar';
+import { DockablePanel } from '../components/DockablePanel';
 import { ScriptClipEditor } from '../components/ScriptClipEditor';
 import { Button } from '../components/ui';
-import type { AnnotationData, QueueClip } from '@marker/shared-types';
+import { ZoomableImage } from '../components/ZoomableImage';
+import { ZoomControls } from '../components/ZoomControls';
+import { useZoom } from '../hooks/useZoom';
+import { markTickTotal, nextNumber } from '../lib/annotations';
+import type { Annotation, AnnotationData, QueueClip } from '@marker/shared-types';
 
 // Loads one clip (the one in the URL, else the first this teacher hasn't finished).
 // The panel below is keyed by clip id, so ticks and typed marks can never carry over to another script.
 export function MarkingInterface() {
   const { examId, questionId, clipId } = useParams<{ examId: string; questionId: string; clipId?: string }>();
   const navigate = useNavigate();
+  const loc = useLocation();
+  const backTarget = useBackTarget({ to: '/marking', label: 'Marking' });
+  // Moving between scripts keeps the remembered "came from" page, so Back still returns to it.
+  const keep = { state: loc.state };
 
   const clipQ = useQuery({
     queryKey: ['clip-queue', examId, questionId, clipId ?? 'next'],
@@ -26,7 +37,7 @@ export function MarkingInterface() {
     return (
       <div className="p-6 text-center">
         <p role="alert" className="mb-4 text-red-700">{(clipQ.error as Error).message}</p>
-        <Button onClick={() => navigate(`/mark/${examId}/${questionId}`)}>Back to the first unmarked clip</Button>
+        <Button onClick={() => navigate(`/mark/${examId}/${questionId}`, keep)}>Back to the first unmarked clip</Button>
       </div>
     );
   }
@@ -39,8 +50,8 @@ export function MarkingInterface() {
         <div className="text-2xl mb-2">All done!</div>
         <p className="text-slate-500 mb-4">You've marked all clips for this question.</p>
         <div className="flex justify-center gap-2">
-          {firstId && <Button onClick={() => navigate(`/mark/${examId}/${questionId}/${firstId}`)}>Review your marking</Button>}
-          <Button variant="primary" onClick={() => navigate('/my-exams')}>Back to My Marking</Button>
+          {firstId && <Button onClick={() => navigate(`/mark/${examId}/${questionId}/${firstId}`, keep)}>Review your marking</Button>}
+          <Button variant="primary" onClick={() => navigate(backTarget.to, { state: backTarget.state })}>Back to {backTarget.label}</Button>
         </div>
       </div>
     );
@@ -63,11 +74,17 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   clip: QueueClip; examId: string; questionId: string; refetch: () => void;
 }) {
   const navigate = useNavigate();
+  const loc = useLocation();
+  const backTarget = useBackTarget({ to: '/marking', label: 'Marking' });
   const qc = useQueryClient();
   const question = clip.question;
   const maxMarks = question.max_marks;
 
-  const initialAnnotations: AnnotationData = clip.my_mark?.annotation_data ?? { annotations: [] };
+  // Ticks placed on a converted page that has since been discarded have nothing to sit on, so they are dropped
+  const savedAnnotations: AnnotationData = clip.my_mark?.annotation_data ?? { annotations: [] };
+  const initialAnnotations: AnnotationData = clip.converted_url
+    ? savedAnnotations
+    : { annotations: savedAnnotations.annotations.filter((a) => a.layer !== 'text') };
   const initialTicks = markTickTotal(initialAnnotations);
   // `typed` is null while the Marks box simply follows the Mark ticks; typing a different number overrides them.
   const initialTyped = clip.my_mark?.marks_awarded == null
@@ -80,8 +97,17 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   const [showMs, setShowMs] = useState(false);
   const [showPages, setShowPages] = useState(false);
   const [showAi, setShowAi] = useState(false);
-  const [showOcr, setShowOcr] = useState(false);
-  const [ocrText, setOcrText] = useState<string | null>(null);
+  // The converted-handwriting page (a saved picture of the transcription), once made
+  const [convertedUrl, setConvertedUrl] = useState<string | null>(clip.converted_url);
+  const [view, setView] = useState<'script' | 'converted'>('script');
+  const [tool, setTool] = useState<Tool>('mark_tick');
+  const [color, setColor] = useState(COLORS[0]);
+  const scriptZoom = useZoom('marker.zoom.script');
+  const convertedZoom = useZoom('marker.zoom.converted');
+  const zoomState = view === 'converted' ? convertedZoom : scriptZoom;
+  // Each picture has its own set of annotations; ticks on both count towards the same mark
+  const layer = view === 'converted' ? 'text' : 'clip';
+  const onLayer = (a: Annotation) => (a.layer ?? 'clip') === layer;
 
   const ticks = markTickTotal(annotations);
   const marks = typed ?? (ticks > 0 ? String(ticks) : '');
@@ -110,12 +136,45 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     },
   });
 
-  const ocrMutation = useMutation({
+  // Convert the handwriting to text once: the text and its page image are saved on the clip, so asking
+  // again returns them. `refresh` converts afresh and drops ticks made on the old converted page.
+  const convertMutation = useMutation({
     mutationFn: (refresh: boolean) => api.runOcr(clip.id, refresh),
-    onSuccess: (r) => setOcrText(r.data.ocr_text),
+    onSuccess: (r, refresh) => {
+      setConvertedUrl(r.data.converted_url);
+      if (refresh) setAnnotations((d) => ({ annotations: d.annotations.filter((a) => a.layer !== 'text') }));
+      setView('converted');
+    },
   });
 
-  const handleAnnotationChange = useCallback((data: AnnotationData) => setAnnotations(data), []);
+  function convertAgain() {
+    if (window.confirm(
+      'Convert this handwriting again?\n\nThe text is read afresh, and any ticks or notes you placed on the '
+      + 'converted page are removed (including mark ticks, so check the mark afterwards). '
+      + 'Your marks on the original script are kept.',
+    )) convertMutation.mutate(true);
+  }
+
+  const addAnnotation = useCallback(
+    (a: Annotation) => setAnnotations((d) => ({ annotations: [...d.annotations, a] })), []);
+  const removeAnnotation = useCallback(
+    (id: string) => setAnnotations((d) => ({ annotations: d.annotations.filter((a) => a.id !== id) })), []);
+  // Undo takes back the last annotation on the picture you are looking at
+  const undoAnnotation = () => setAnnotations((d) => {
+    const i = d.annotations.map(onLayer).lastIndexOf(true);
+    return i < 0 ? d : { annotations: d.annotations.filter((_, j) => j !== i) };
+  });
+
+  // Esc leaves the converted view
+  useEffect(() => {
+    if (view !== 'converted') return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key === 'Escape' && !(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'))) setView('script');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [view]);
 
   // Warn before closing the tab with unsaved ticks
   useEffect(() => {
@@ -125,7 +184,8 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     return () => window.removeEventListener('beforeunload', handler);
   }, [dirty]);
 
-  const go = (id: string | null) => navigate(id ? `/mark/${examId}/${questionId}/${id}` : `/mark/${examId}/${questionId}`);
+  const go = (id: string | null) =>
+    navigate(id ? `/mark/${examId}/${questionId}/${id}` : `/mark/${examId}/${questionId}`, { state: loc.state });
 
   // Leave this clip, keeping any ticks and typed mark as a draft (a draft never counts as marked)
   async function leaveTo(id: string | null) {
@@ -152,11 +212,11 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     <div className="flex h-full flex-col">
       {/* Header bar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
-        <button onClick={async () => { if (dirty) { try { await saveMutation.mutateAsync(true); } catch { return; } } navigate('/my-exams'); }}
-          className="text-sm text-indigo-600 hover:underline">← Back</button>
-        <div className="font-medium text-slate-700">
-          Question {question.question_number} — max {maxMarks} marks
-        </div>
+        <button onClick={async () => { if (dirty) { try { await saveMutation.mutateAsync(true); } catch { return; } } navigate(backTarget.to, { state: backTarget.state }); }}
+          className="text-sm font-medium text-indigo-600 hover:underline">← Back to {backTarget.label}</button>
+        <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700" title={`Question ${question.question_number}`}>
+          Q{question.question_number}
+        </span>
 
         <div className="flex items-center gap-1 text-sm">
           <Button className="!px-2.5" disabled={!clip.prev_id || saveMutation.isPending} onClick={() => void leaveTo(clip.prev_id)} aria-label="Previous script">‹ Prev</Button>
@@ -179,19 +239,30 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
         </div>
 
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-xs text-slate-500" aria-live="polite">{statusText}</span>
           <span className="text-sm text-slate-500">{clip.remaining} to mark</span>
-          <button
-            onClick={() => {
-              const next = !showOcr;
-              setShowOcr(next);
-              if (next && ocrText === null && clip.ocr_text === null && !ocrMutation.isPending) ocrMutation.mutate(false);
-            }}
-            aria-pressed={showOcr}
-            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${showOcr ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-          >
-            {showOcr ? 'Hide typed text' : 'Typed text'}
-          </button>
+          <ZoomControls
+            zoom={zoomState.zoom} onZoomIn={zoomState.zoomIn} onZoomOut={zoomState.zoomOut} onFit={zoomState.fit}
+            label={view === 'converted' ? 'Converted page zoom' : 'Script zoom'}
+          />
+          {convertedUrl ? (
+            <button
+              onClick={() => setView((v) => (v === 'converted' ? 'script' : 'converted'))}
+              aria-pressed={view === 'converted'}
+              title="The handwriting as typed text, saved so it is only converted once. You can mark it just like the script."
+              className={`rounded px-3 py-1 text-xs font-medium transition-colors ${view === 'converted' ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            >
+              {view === 'converted' ? 'Back to script' : 'See converted handwriting'}
+            </button>
+          ) : (
+            <button
+              onClick={() => convertMutation.mutate(false)}
+              disabled={convertMutation.isPending}
+              title="Read the handwriting and show it as typed text you can mark. Done once, then saved."
+              className="rounded bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-200 disabled:opacity-60"
+            >
+              {convertMutation.isPending ? 'Converting…' : 'Convert handwriting to text'}
+            </button>
+          )}
           {clip.ai_mark && (
             <button
               onClick={() => setShowAi((v) => !v)}
@@ -203,7 +274,10 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
           )}
           <button
             onClick={() => setShowMs((v) => !v)}
-            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${showMs ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            disabled={!clip.ms_url}
+            title={clip.ms_url ? 'Show or hide the mark scheme. Drag its title bar to move it.' : 'No mark scheme has been clipped for this question'}
+            aria-pressed={showMs}
+            className={`rounded px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${showMs ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
           >
             {showMs ? 'Hide MS' : 'Show MS'}
           </button>
@@ -217,35 +291,130 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
         </div>
       </div>
 
+      {convertMutation.error && (
+        <div role="alert" className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          {convertMutation.error instanceof HttpError && convertMutation.error.code === 'AI_NOT_CONFIGURED'
+            ? 'Text recognition isn\'t set up on this server.'
+            : (convertMutation.error as Error).message}
+          <button onClick={() => convertMutation.mutate(convertMutation.variables ?? false)} className="ml-3 font-medium underline">Try again</button>
+        </div>
+      )}
+
       {clip.changed_after_marking && (
         <div role="status" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
           The pages for this answer were changed after it was first marked, so earlier marks may refer to the old selection.
         </div>
       )}
 
-      {/* Main content */}
-      <div className="flex min-h-0 flex-1 gap-4 p-4">
-        {/* Annotation area: the tools stay in view, the script scrolls inside its own pane */}
-        <div className="min-h-0 min-w-0 flex-1">
-          <AnnotationCanvas
-            key={`${clip.id}-${clip.reclipped_at ?? ''}`}
-            clipUrl={clip.clip_url}
-            initialData={annotations}
-            onChange={handleAnnotationChange}
-            maxMarkTicks={maxMarks}
+      {/* Main content: the script with its tools; the mark scheme docks around it */}
+      <DockablePanel
+        title="Mark scheme"
+        storageKey="marker.panel.ms"
+        open={showMs && Boolean(clip.ms_url)}
+        onClose={() => setShowMs(false)}
+        panel={clip.ms_url ? <ZoomableImage src={clip.ms_url} alt="Mark scheme" storageKey="marker.zoom.ms" /> : null}
+      >
+        <div className="flex h-full min-h-0 gap-4 p-4">
+          <AnnotationToolbar
+            tool={tool}
+            onTool={setTool}
+            color={color}
+            onColor={setColor}
+            canUndo={annotations.annotations.some(onLayer)}
+            onUndo={undoAnnotation}
+            top={
+              <>
+                <div>
+                  <label htmlFor="marks" className="block text-xs font-medium uppercase tracking-wide text-slate-500">Mark</label>
+                  <input
+                    id="marks"
+                    type="number"
+                    min={0}
+                    max={maxMarks}
+                    step={1}
+                    value={marks}
+                    onChange={(e) => setTyped(e.target.value === String(ticks) && ticks > 0 ? null : e.target.value)}
+                    className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-center text-lg font-semibold focus:border-indigo-500 focus:outline-none"
+                  />
+                  {overriding && (
+                    <p className="mt-1 text-[11px] leading-tight text-slate-500">
+                      Typed mark in use.{' '}
+                      <button type="button" onClick={() => setTyped(null)} className="font-medium text-indigo-600 underline">Use tick total ({ticks})</button>
+                    </p>
+                  )}
+                  {marks !== '' && !marksValid && (
+                    <p role="alert" className="mt-1 text-xs text-red-600">Enter a whole number from 0 to {maxMarks}.</p>
+                  )}
+                </div>
+                <Button
+                  className="w-full"
+                  disabled={!marksValid || saveMutation.isPending || (!dirty && clip.state === 'marked')}
+                  onClick={() => saveMutation.mutate(false, { onSuccess: refetch })}
+                >
+                  Save
+                </Button>
+                <Button variant="primary" className="w-full" disabled={!marksValid || saveMutation.isPending} onClick={() => void saveAndNext()}>
+                  {saveMutation.isPending ? 'Saving…' : 'Save & Next →'}
+                </Button>
+                <p className="min-h-4 text-center text-xs text-slate-500" aria-live="polite">{statusText}</p>
+                {saveMutation.error && (
+                  <p role="alert" className="text-xs text-red-600">{(saveMutation.error as Error).message}</p>
+                )}
+              </>
+            }
           />
-        </div>
 
-        {/* Side panels */}
-        {((showMs && clip.ms_url) || showAi || showOcr) && (
-          <div className="min-h-0 w-80 flex-shrink-0 space-y-3 overflow-y-auto">
-            {showMs && clip.ms_url && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2">
-                <div className="mb-1 text-xs font-medium text-amber-700 uppercase tracking-wide">Mark Scheme</div>
-                <img src={clip.ms_url} alt="Mark scheme" className="w-full rounded" />
+          {view === 'converted' && convertedUrl ? (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm text-sky-900">
+                <span className="font-medium">Converted handwriting</span>
+                <span className="text-xs text-sky-700">Automatic, may contain mistakes. Ticks placed here count towards the same mark.</span>
+                <button type="button" onClick={() => setView('script')} className="ml-auto text-xs font-medium underline">Back to script (Esc)</button>
+                <button
+                  type="button"
+                  onClick={convertAgain}
+                  disabled={convertMutation.isPending}
+                  className="text-xs text-sky-700 underline disabled:opacity-60"
+                >
+                  {convertMutation.isPending ? 'Converting…' : 'Convert again'}
+                </button>
               </div>
-            )}
-            {showAi && clip.ai_mark && (
+              <AnnotationCanvas
+                key={convertedUrl}
+                imageUrl={convertedUrl}
+                annotations={annotations.annotations.filter((a) => a.layer === 'text')}
+                tool={tool}
+                color={color}
+                zoom={convertedZoom.zoom}
+                onZoom={convertedZoom.setZoom}
+                onTool={setTool}
+                onAdd={(a) => addAnnotation({ ...a, layer: 'text' })}
+                onRemove={removeAnnotation}
+                nextNumber={() => nextNumber(annotations.annotations)}
+                markTickCount={ticks}
+                maxMarkTicks={maxMarks}
+              />
+            </div>
+          ) : (
+            <AnnotationCanvas
+              key={`${clip.id}-${clip.reclipped_at ?? ''}`}
+              imageUrl={clip.clip_url}
+              annotations={annotations.annotations.filter((a) => (a.layer ?? 'clip') === 'clip')}
+              tool={tool}
+              color={color}
+              zoom={scriptZoom.zoom}
+              onZoom={scriptZoom.setZoom}
+              onTool={setTool}
+              onAdd={addAnnotation}
+              onRemove={removeAnnotation}
+              nextNumber={() => nextNumber(annotations.annotations)}
+              markTickCount={ticks}
+              maxMarkTicks={maxMarks}
+            />
+          )}
+
+          {showAi && clip.ai_mark && (
+            <div className="min-h-0 w-72 flex-shrink-0 space-y-3 overflow-y-auto">
               <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-950">
                 <div className="mb-1 text-xs font-medium text-violet-700 uppercase tracking-wide">AI suggestion</div>
                 {clip.ai_mark.marks_awarded !== null ? (
@@ -265,81 +434,10 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
                 )}
                 <p className="mt-2 text-xs text-violet-700">Only the mark you save counts.</p>
               </div>
-            )}
-            {showOcr && (
-              <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
-                <div className="mb-1 text-xs font-medium text-sky-700 uppercase tracking-wide">Typed text (automatic, may contain mistakes)</div>
-                {ocrMutation.isPending ? (
-                  <p className="text-sky-700">Reading the handwriting…</p>
-                ) : ocrMutation.error ? (
-                  <div role="alert" className="text-red-700">
-                    {ocrMutation.error instanceof HttpError && ocrMutation.error.code === 'AI_NOT_CONFIGURED'
-                      ? 'Text recognition isn\'t set up on this server.'
-                      : (ocrMutation.error as Error).message}
-                    <button onClick={() => ocrMutation.mutate(false)} className="ml-2 underline">Try again</button>
-                  </div>
-                ) : (ocrText ?? clip.ocr_text) !== null ? (
-                  <>
-                    <pre className="whitespace-pre-wrap font-sans">{(ocrText ?? clip.ocr_text) || '(nothing readable)'}</pre>
-                    <button onClick={() => ocrMutation.mutate(true)} className="mt-2 text-xs text-sky-700 underline">Read again</button>
-                  </>
-                ) : null}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Mark entry footer */}
-      <div className="flex flex-wrap items-center gap-4 border-t border-slate-200 bg-white px-4 py-3">
-        <div className="flex items-center gap-2">
-          <label htmlFor="marks" className="text-sm font-medium text-slate-700">Marks:</label>
-          <input
-            id="marks"
-            type="number"
-            min={0}
-            max={maxMarks}
-            step={1}
-            value={marks}
-            onChange={(e) => setTyped(e.target.value === String(ticks) && ticks > 0 ? null : e.target.value)}
-            className="w-20 rounded border border-slate-300 px-2 py-1.5 text-center text-sm font-medium focus:border-indigo-500 focus:outline-none"
-            placeholder={`0–${maxMarks}`}
-          />
-          <span className="text-sm text-slate-400">/ {maxMarks}</span>
-        </div>
-
-        <span className="text-xs text-slate-500">
-          {ticks > 0
-            ? `${ticks} mark tick${ticks === 1 ? '' : 's'}`
-            : 'Place mark ticks on the answer, or type a mark'}
-          {overriding && (
-            <>
-              {' · '}typed mark in use{' '}
-              <button onClick={() => setTyped(null)} className="font-medium text-indigo-600 underline">use tick total ({ticks})</button>
-            </>
+            </div>
           )}
-        </span>
-
-        {marks !== '' && !marksValid && (
-          <span role="alert" className="text-sm text-red-600">Enter a whole number from 0 to {maxMarks}.</span>
-        )}
-        {saveMutation.error && (
-          <span role="alert" className="text-sm text-red-600">{(saveMutation.error as Error).message}</span>
-        )}
-
-        <div className="ml-auto flex gap-2">
-          <Button
-            disabled={!marksValid || saveMutation.isPending || (!dirty && clip.state === 'marked')}
-            onClick={() => saveMutation.mutate(false, { onSuccess: refetch })}
-          >
-            Save
-          </Button>
-          <Button variant="primary" disabled={!marksValid || saveMutation.isPending} onClick={() => void saveAndNext()}>
-            {saveMutation.isPending ? 'Saving…' : 'Save & Next →'}
-          </Button>
         </div>
-      </div>
-
+      </DockablePanel>
       {showPages && (
         <ScriptClipEditor
           scriptId={clip.script_id}
@@ -351,9 +449,11 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
           onSaved={() => {
             // Ticks were placed on the old crop, so they no longer line up
             setShowPages(false);
+            // (the server has discarded the converted page too: it was made from the old crop)
             setAnnotations({ annotations: [] });
-            setOcrText(null);
-            ocrMutation.reset();
+            setConvertedUrl(null);
+            setView('script');
+            convertMutation.reset();
             refetch();
           }}
         />

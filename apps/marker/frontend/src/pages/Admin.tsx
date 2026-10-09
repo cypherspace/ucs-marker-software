@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { PageHeader } from '../components/PageHeader';
 import { api } from '../api';
-import { Button, Card, ProgressBar, StatusPill } from '../components/ui';
+import { AppLink, Button, Card, ProgressBar, StatusPill } from '../components/ui';
 import type { AuditEntry, OverviewExam } from '@marker/shared-types';
 
 type Role = 'admin' | 'teacher';
@@ -26,7 +26,7 @@ export function Admin() {
 
   return (
     <div className="mx-auto max-w-6xl p-4 sm:p-6">
-      <h1 className="mb-4 text-2xl font-semibold text-slate-800">Admin</h1>
+      <PageHeader title="Admin" crumbs={[{ label: 'Home', to: '/' }]} subtitle="Manage who can sign in, and see how marking is going across every exam." />
       <div role="tablist" className="mb-6 flex w-fit overflow-hidden rounded-lg border border-slate-200 bg-white">
         {TABS.map(([t, label]) => (
           <button
@@ -254,7 +254,7 @@ function OverviewTab() {
             <h2 className="font-medium text-slate-800">{e.name}</h2>
             <StatusPill status={e.status} />
             <span className="text-xs text-slate-500">Lead: {e.lead_email ?? 'unknown'}</span>
-            <Link to={`/exams/${e.exam_id}/progress`} className="ml-auto text-sm text-indigo-600 hover:underline">Open progress</Link>
+            <AppLink to={`/exams/${e.exam_id}`} className="ml-auto text-sm text-indigo-600 hover:underline">Open progress</AppLink>
           </div>
           {e.clips_total > 0 ? (
             <div className="mt-3 max-w-md">

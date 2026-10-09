@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { api } from '../api';
-import { Card, LinkButton, ProgressBar } from '../components/ui';
+import { AppLink, Card, LinkButton, ProgressBar, StatusPill } from '../components/ui';
 
 function Icon({ children }: { children: ReactNode }) {
   return (
@@ -15,10 +15,8 @@ function Icon({ children }: { children: ReactNode }) {
 
 const MarkIcon = () => <Icon><path d="M4 12.5 9 17.5 20 6.5" /></Icon>;
 const ExamIcon = () => <Icon><path d="M8 4h8l3 3v13H5V4h3Z" /><path d="M9 11h6M9 15h6" /></Icon>;
-const AiIcon = () => <Icon><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3Z" /><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15Z" /></Icon>;
 const CompareIcon = () => <Icon><path d="M8 4v16M16 4v16" /><path d="M4 8h8M12 16h8" /></Icon>;
 const StaffIcon = () => <Icon><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" /><path d="M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.4c2 .7 3.5 2.6 3.5 5.6" /></Icon>;
-const ProgressIcon = () => <Icon><path d="M5 20V10M12 20V4M19 20v-7" /></Icon>;
 
 function HomeCard({
   icon, title, children, actions,
@@ -40,6 +38,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 export function Home() {
   const meQ = useQuery({ queryKey: ['auth', 'me'], queryFn: () => api.me() });
   const homeQ = useQuery({ queryKey: ['home'], queryFn: () => api.home() });
+  const examsQ = useQuery({ queryKey: ['exams'], queryFn: () => api.listExams() });
 
   if (homeQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
   if (homeQ.error || !homeQ.data) {
@@ -47,8 +46,8 @@ export function Home() {
   }
 
   const me = meQ.data?.data;
-  const { marking, exams, progress, admin, ai, comparative } = homeQ.data.data;
-  const pct = progress.clips_total > 0 ? Math.round((progress.clips_marked / progress.clips_total) * 100) : 0;
+  const { marking, exams, progress, admin, comparative } = homeQ.data.data;
+  const recentExams = (examsQ.data?.data ?? []).slice(0, 3);
   const nothingYet = exams.total === 0 && marking.assigned_questions === 0;
 
   const examBreakdown = [
@@ -79,20 +78,25 @@ export function Home() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <HomeCard
           icon={<MarkIcon />}
-          title="My marking"
+          title="Marking"
           actions={
             marking.next ? (
               <>
                 <LinkButton to={`/mark/${marking.next.exam_id}/${marking.next.question_id}`} variant="primary">Start marking</LinkButton>
-                <LinkButton to="/my-exams" variant="secondary">All my questions</LinkButton>
+                <LinkButton to="/marking" variant="secondary">All my questions</LinkButton>
+                {progress.clips_total > 0 && <LinkButton to="/marking/ai" variant="secondary">AI marking</LinkButton>}
               </>
             ) : (
-              <LinkButton to="/my-exams" variant="secondary">See my exams</LinkButton>
+              <>
+                <LinkButton to="/marking" variant="secondary">Open marking</LinkButton>
+                {progress.clips_total > 0 && <LinkButton to="/marking/ai" variant="secondary">AI marking</LinkButton>}
+              </>
             )
           }
         >
+          <p className="text-sm text-slate-500">Mark the questions you have been given, one script at a time.</p>
           {marking.assigned_questions === 0 ? (
-            <p className="text-sm text-slate-500">Nothing has been assigned to you for marking yet.</p>
+            <p className="text-sm text-slate-500">No questions have been assigned to you yet.</p>
           ) : marking.clips_left === 0 ? (
             <>
               <p className="text-3xl font-semibold text-green-600">All caught up</p>
@@ -119,52 +123,38 @@ export function Home() {
           title="Exams"
           actions={
             <>
-              <LinkButton to="/exams" variant="primary">Manage exams</LinkButton>
+              <LinkButton to="/exams" variant="primary">All exams</LinkButton>
               <LinkButton to="/exams/new" variant="secondary">New exam</LinkButton>
             </>
           }
         >
+          <p className="text-sm text-slate-500">Set up papers, follow marking progress and export results.</p>
           {exams.total === 0 ? (
             <p className="text-sm text-slate-500">No exams yet.</p>
           ) : (
             <>
-              <p className="text-3xl font-semibold text-slate-800">
-                {exams.total} <span className="text-base font-normal text-slate-500">{exams.total === 1 ? 'exam' : 'exams'}</span>
-              </p>
-              <p className="text-sm text-slate-500">{examBreakdown}</p>
-              {exams.setup > 0 && (
-                <p className="text-sm font-medium text-amber-700">
-                  {plural(exams.setup, 'exam')} still to be set up before marking can start.
-                </p>
-              )}
+              <p className="text-sm text-slate-600">{plural(exams.total, 'exam')}: {examBreakdown}</p>
+              <ul className="divide-y divide-slate-100 rounded-lg border border-slate-100">
+                {recentExams.map((e) => {
+                  const inSetup = e.status === 'setup' || e.status === 'clipping';
+                  return (
+                    <li key={e.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                      <span className="min-w-0 flex-1 truncate text-slate-800">{e.name}</span>
+                      <StatusPill status={e.status} />
+                      <AppLink
+                        to={inSetup ? `/exams/${e.id}/setup` : `/exams/${e.id}`}
+                        className="font-medium text-indigo-600 hover:underline"
+                      >
+                        {inSetup ? 'Continue setup' : 'Open'}
+                      </AppLink>
+                    </li>
+                  );
+                })}
+              </ul>
             </>
           )}
         </HomeCard>
 
-        <HomeCard
-          icon={<ProgressIcon />}
-          title="Progress and results"
-          actions={
-            <LinkButton to={progress.latest_exam ? `/exams/${progress.latest_exam.id}/progress` : '/exams'} variant="secondary">
-              {progress.latest_exam ? 'View progress' : 'Go to exams'}
-            </LinkButton>
-          }
-        >
-          {progress.clips_total === 0 ? (
-            <p className="text-sm text-slate-500">Marking progress appears here once scripts have been clipped.</p>
-          ) : (
-            <>
-              <p className="text-3xl font-semibold text-slate-800">
-                {pct}% <span className="text-base font-normal text-slate-500">marked</span>
-              </p>
-              <ProgressBar value={progress.clips_marked} max={progress.clips_total} label="Overall marking progress" />
-              <p className="text-sm text-slate-500">
-                {progress.clips_marked} of {progress.clips_total} clips across {me?.role === 'admin' ? 'all exams' : 'the exams you lead'}.
-                Export results from an exam's progress page.
-              </p>
-            </>
-          )}
-        </HomeCard>
         {comparative.questions > 0 && (
           <HomeCard
             icon={<CompareIcon />}
@@ -173,10 +163,11 @@ export function Home() {
               comparative.next ? (
                 <LinkButton to={`/compare/${comparative.next.exam_id}/${comparative.next.question_id}`} variant="primary">Judge comparisons</LinkButton>
               ) : (
-                <LinkButton to="/my-exams" variant="secondary">See my questions</LinkButton>
+                <LinkButton to="/marking" variant="secondary">Open marking</LinkButton>
               )
             }
           >
+            <p className="text-sm text-slate-500">Pick the better of two anonymous answers. All the choices build a ranked order.</p>
             {comparative.pairs_left === 0 ? (
               <p className="text-sm text-slate-500">No comparisons are waiting for you right now.</p>
             ) : (
@@ -185,30 +176,11 @@ export function Home() {
                   {comparative.pairs_left} <span className="text-base font-normal text-slate-500">to judge</span>
                 </p>
                 <p className="text-sm text-slate-500">
-                  Choose how many you will do; the AI can judge the rest.
-                  {comparative.next && <> Next: {comparative.next.exam_name}, Q{comparative.next.question_number}.</>}
+                  {comparative.next && <>Next: {comparative.next.exam_name}, Q{comparative.next.question_number}. </>}
+                  You choose how many to judge in each sitting.
                 </p>
               </>
             )}
-          </HomeCard>
-        )}
-
-        {progress.clips_total > 0 && (
-          <HomeCard
-            icon={<AiIcon />}
-            title="AI marking"
-            actions={
-              progress.latest_exam
-                ? <LinkButton to={`/exams/${progress.latest_exam.id}/ai`} variant="secondary">Open AI marking</LinkButton>
-                : <LinkButton to="/exams" variant="secondary">Choose an exam</LinkButton>
-            }
-          >
-            <p className="text-3xl font-semibold text-slate-800">
-              {ai.ai_marked} <span className="text-base font-normal text-slate-500">clips AI-marked</span>
-            </p>
-            <p className="text-sm text-slate-500">
-              AI marks sit alongside teachers' marks so you can compare them. A teacher's mark always counts first.
-            </p>
           </HomeCard>
         )}
 
@@ -218,6 +190,7 @@ export function Home() {
             title="Staff and admin"
             actions={<LinkButton to="/admin" variant="secondary">Manage staff</LinkButton>}
           >
+            <p className="text-sm text-slate-500">Invite and remove teachers, and see who has marked what.</p>
             <p className="text-3xl font-semibold text-slate-800">
               {admin.staff} <span className="text-base font-normal text-slate-500">staff {admin.staff === 1 ? 'account' : 'accounts'}</span>
             </p>

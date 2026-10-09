@@ -5,6 +5,7 @@ Endpoints:
   POST /clip-scripts    Clip question regions from student script PDFs
   POST /ocr             Transcribe handwriting via Gemini Vision
   POST /render          Render a PDF page to PNG (for CoordinatePicker admin UI)
+  POST /render-text     Typeset transcribed handwriting as a page image (converted-handwriting view)
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from pydantic import BaseModel
 
 from pipeline.storage import storage
 from pipeline.student_clipper import clip_question, render_page
+from pipeline.text_render import render_text_page
 
 load_dotenv()
 
@@ -95,6 +97,10 @@ class OcrRequest(BaseModel):
 
 
 class OcrResponse(BaseModel):
+    text: str
+
+
+class RenderTextRequest(BaseModel):
     text: str
 
 
@@ -277,6 +283,17 @@ def ocr(req: OcrRequest):
         raise HTTPException(status_code=500, detail=f"OCR failed: {exc}")
 
     return OcrResponse(text=text)
+
+
+@app.post("/render-text")
+def render_text(req: RenderTextRequest):
+    """Typeset transcribed handwriting as a page image (PNG) for the converted-handwriting view."""
+    try:
+        png_bytes = render_text_page(req.text)
+    except Exception as exc:
+        logger.error("render_text_page failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Text render failed: {exc}")
+    return Response(content=png_bytes, media_type="image/png")
 
 
 @app.post("/render")

@@ -8,6 +8,7 @@ import { describeExtractorFailure, extractorFetch } from '../services/extractor.
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireClipAccess, requireQuestionAccess, type ClipContext } from '../services/access.js';
 import { aiMarkClip, modelName } from '../services/ai.js';
+import { convertedUrl, renderConvertedPage, saveConvertedImage, stripTextLayer } from '../services/converted.js';
 import type { AiPlan, AiResultRow, AiResults, AiStepResult } from '@marker/shared-types';
 
 const router = Router();
@@ -18,50 +19,68 @@ router.get('/ai/status', requireAuth, (_req, res) => {
   res.json({ data: { configured: aiConfigured(), model: modelName() } });
 });
 
-// ── OCR ─────────────────────────────────────────────────────────────────────
-// Transcribe a clip's handwriting. The result is cached on the clip.
+// ── Convert handwriting to text ─────────────────────────────────────────────
+// Transcribe a clip's handwriting and render the text as a page image that teachers can annotate.
+// Both are saved on the clip, so a clip is converted once: asking again returns what is stored.
+// Text that was read earlier but never rendered is rendered without calling Gemini again.
+// ?refresh=1 converts again (Gemini and the page image), dropping annotations made on the old page.
 router.post('/clips/:id/ocr', requireAuth, async (req, res, next) => {
   try {
     const clip = await requireClipAccess(req, res, req.params.id);
     if (!clip) return;
-    if (clip.ocr_text !== null && req.query.refresh !== '1') {
-      res.json({ data: { ocr_text: clip.ocr_text, cached: true } }); return;
-    }
-    if (!aiConfigured()) {
-      res.status(503).json({ error: 'Text recognition is not set up (no Gemini key configured).', code: 'AI_NOT_CONFIGURED' }); return;
+    const refresh = req.query.refresh === '1';
+    const stored = await db('script_clips').where({ id: clip.clip_id }).first<{ text_image_url: string | null }>('text_image_url');
+
+    if (!refresh && clip.ocr_text !== null && stored?.text_image_url) {
+      res.json({ data: { ocr_text: clip.ocr_text, converted_url: convertedUrl(clip.clip_id, stored.text_image_url), cached: true } }); return;
     }
 
     let text: string;
-    if (config.aiStub) {
-      text = 'Stub transcription (AI_STUB)';
+    if (!refresh && clip.ocr_text !== null) {
+      text = clip.ocr_text;
     } else {
-      // The extractor reads local/GCS paths and https URLs; Drive clips need the lead teacher's token, sent as a header.
-      const image = isDriveUri(clip.clip_image_url)
-        ? await getDriveMediaRequest(clip.lead_teacher_id, fileIdFromUri(clip.clip_image_url))
-        : { url: storage.rawUri(clip.clip_image_url), headers: undefined };
-      let resp: Response;
-      try {
-        resp = await extractorFetch('/ocr', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ image_url: image.url, image_headers: image.headers }),
-        });
-      } catch (err) {
-        res.status(502).json({ error: `Could not reach the text recognition service: ${describeExtractorFailure(err)}`, code: 'EXTRACTOR_UNREACHABLE' }); return;
+      if (!aiConfigured()) {
+        res.status(503).json({ error: 'Text recognition is not set up (no Gemini key configured).', code: 'AI_NOT_CONFIGURED' }); return;
       }
-      if (!resp.ok) {
-        console.error(`OCR failed (${resp.status}):`, await resp.text());
-        res.status(502).json({ error: `Text recognition failed (service returned ${resp.status})`, code: 'OCR_ERROR' }); return;
+      if (config.aiStub) {
+        text = 'Stub transcription (AI_STUB)';
+      } else {
+        // The extractor reads local/GCS paths and https URLs; Drive clips need the lead teacher's token, sent as a header.
+        const image = isDriveUri(clip.clip_image_url)
+          ? await getDriveMediaRequest(clip.lead_teacher_id, fileIdFromUri(clip.clip_image_url))
+          : { url: storage.rawUri(clip.clip_image_url), headers: undefined };
+        let resp: Response;
+        try {
+          resp = await extractorFetch('/ocr', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ image_url: image.url, image_headers: image.headers }),
+          });
+        } catch (err) {
+          res.status(502).json({ error: `Could not reach the text recognition service: ${describeExtractorFailure(err)}`, code: 'EXTRACTOR_UNREACHABLE' }); return;
+        }
+        if (!resp.ok) {
+          console.error(`OCR failed (${resp.status}):`, await resp.text());
+          res.status(502).json({ error: `Text recognition failed (service returned ${resp.status})`, code: 'OCR_ERROR' }); return;
+        }
+        text = ((await resp.json()) as { text: string }).text;
       }
-      text = ((await resp.json()) as { text: string }).text;
     }
-    await db('script_clips').where({ id: clip.clip_id }).update({ ocr_text: text });
-    res.json({ data: { ocr_text: text, cached: false } });
+
+    const rendered = await renderConvertedPage(text);
+    if ('fail' in rendered) { res.status(rendered.fail.status).json({ error: rendered.fail.error, code: rendered.fail.code }); return; }
+    const uri = await saveConvertedImage({
+      clipId: clip.clip_id, questionId: clip.question_id, scriptId: clip.script_id,
+      leadTeacherId: clip.lead_teacher_id, examId: clip.exam_id,
+    }, rendered.png);
+
+    await db('script_clips').where({ id: clip.clip_id }).update({ ocr_text: text, text_image_url: uri });
+    if (refresh) await stripTextLayer([clip.clip_id]);
+    res.json({ data: { ocr_text: text, converted_url: convertedUrl(clip.clip_id, uri), cached: false } });
   } catch (err) {
     next(err);
   }
 });
-
 // ── AI marking ──────────────────────────────────────────────────────────────
 // The browser drives AI runs in small steps: `plan` picks the clips (so the
 // teacher sees the count before anything is sent to Gemini), then `step`
