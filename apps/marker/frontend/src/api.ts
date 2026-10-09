@@ -246,7 +246,7 @@ export const api = {
     http<ApiSuccess<{ pair_ids: string[]; total: number; has_mark_scheme: boolean }>>(
       `${A}/exams/${examId}/compare/${questionId}/ai-judge/plan`, { method: 'POST' }),
   compareAiStep: (examId: string, questionId: string, pairIds: string[], guidance: string, useExamples: boolean) =>
-    http<ApiSuccess<{ results: { pair_id: string; ok: boolean; error?: string }[] }>>(
+    http<ApiSuccess<{ results: (Pick<AiStepResult, 'ok' | 'error' | 'code' | 'retryable' | 'fatal' | 'retry_after_seconds'> & { pair_id: string })[] }>>(
       `${A}/exams/${examId}/compare/${questionId}/ai-judge/step`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { ErrorNotice } from '../components/ErrorNotice';
 import { useBackTarget } from '../lib/nav';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
@@ -292,12 +293,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
       </div>
 
       {convertMutation.error && (
-        <div role="alert" className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
-          {convertMutation.error instanceof HttpError && convertMutation.error.code === 'AI_NOT_CONFIGURED'
-            ? 'Text recognition isn\'t set up on this server.'
-            : (convertMutation.error as Error).message}
-          <button onClick={() => convertMutation.mutate(convertMutation.variables ?? false)} className="ml-3 font-medium underline">Try again</button>
-        </div>
+        <ErrorNotice error={convertMutation.error} onRetry={() => convertMutation.mutate(convertMutation.variables ?? false)} />
       )}
 
       {clip.changed_after_marking && (

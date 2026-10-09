@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Button, Card, ProgressBar } from '../components/ui';
 import { useBatchRunner } from '../hooks/useBatchRunner';
+import { AiRunNotice } from '../components/AiRunNotice';
 import type { AiMode, AiPlan, AiScopeType, AiStrictness } from '@marker/shared-types';
 
 const SCOPES: [AiScopeType, string, string][] = [
@@ -71,7 +72,7 @@ export function AiMarking() {
     setPlan(null);
     runner.start(ids, async (batch) => {
       const res = await api.aiStep(examId!, settings, batch);
-      return res.data.results.map((r) => ({ id: r.clip_id, ok: r.ok, error: r.error }));
+      return res.data.results.map((r) => ({ id: r.clip_id, ok: r.ok, error: r.error, code: r.code, retryable: r.retryable, fatal: r.fatal, retryAfter: r.retry_after_seconds }));
     });
   }
 
@@ -214,10 +215,10 @@ export function AiMarking() {
           </Button>
         )}
         {planMut.error && <p role="alert" className="text-sm text-red-700">{(planMut.error as Error).message}</p>}
-        {runner.state.fatal && <p role="alert" className="text-sm text-red-700">Stopped: {runner.state.fatal}</p>}
+        <AiRunNotice state={runner.state} onResume={runner.resume} onDismiss={runner.reset} />
         {runner.state.status === 'done' && (
           <p className="text-sm text-green-700">
-            Finished: {runner.state.done} done{runner.state.failed.length > 0 && `, ${runner.state.failed.length} failed (${runner.state.failed[0].error}). Run it again to retry them`}.
+            Finished: {runner.state.done} done{runner.state.failed.length > 0 && `, ${runner.state.failed.length} failed (details above). Run it again to retry them`}.
             <button className="ml-2 text-indigo-600 underline" onClick={() => { runner.reset(); refresh(); }}>Refresh results</button>
           </p>
         )}

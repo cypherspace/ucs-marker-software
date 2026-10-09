@@ -370,6 +370,11 @@ export interface AiStepResult {
   ok: boolean;
   marks_awarded?: number | null;
   error?: string;
+  // Set when the failure came from Gemini: what kind, and whether waiting and retrying helps
+  code?: string;
+  retryable?: boolean;
+  fatal?: boolean;
+  retry_after_seconds?: number;
 }
 
 export interface AiResultRow {

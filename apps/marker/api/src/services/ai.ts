@@ -7,10 +7,31 @@ import { getClipBytes } from './clipImages.js';
 import { humanMarkFor, judgementAnchors, markingAnchors } from './anchors.js';
 import type { ClipContext, QuestionContext } from './access.js';
 import type { AiMode, AiStrictness } from '@marker/shared-types';
+import { badReply, classifyThrown, notConfigured, type AiFailure } from './aiErrors.js';
 
 export type Part = { text: string } | { inlineData: { mimeType: string; data: string } };
 
-export class AiError extends Error {}
+export class AiError extends Error {
+  failure: AiFailure;
+  constructor(failure: AiFailure) {
+    super(failure.message);
+    this.failure = failure;
+  }
+}
+
+// Short, automatic retries inside one request for problems that clear on their own. A wait Gemini asks for
+// that is longer than this is passed to the browser instead (it shows a countdown and retries).
+const MAX_ATTEMPTS = 3;
+const MAX_INLINE_WAIT_S = 15;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function inlineWaitSeconds(f: AiFailure, attempt: number): number | null {
+  if (!f.retryable || attempt >= MAX_ATTEMPTS - 1) return null;
+  if (f.code === 'AI_RATE_LIMITED') {
+    return f.retry_after_seconds !== undefined && f.retry_after_seconds <= MAX_INLINE_WAIT_S ? f.retry_after_seconds + 1 : null;
+  }
+  if (f.code === 'AI_OVERLOADED' || f.code === 'AI_NETWORK') return attempt === 0 ? 2 : 5;
+  return null;
+}
 
 const MODEL_TIMEOUT_MS = 90_000;
 
@@ -32,9 +53,7 @@ function stubResponse(req: ModelRequest): string {
   });
 }
 
-async function callModel(req: ModelRequest): Promise<string> {
-  if (config.aiStub) return stubResponse(req);
-  if (!config.googleApiKey) throw new AiError('AI is not configured: GOOGLE_API_KEY is missing');
+async function callModelOnce(req: ModelRequest): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: config.googleApiKey });
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), MODEL_TIMEOUT_MS);
@@ -44,12 +63,40 @@ async function callModel(req: ModelRequest): Promise<string> {
       contents: [{ role: 'user', parts: req.parts }],
       config: { responseMimeType: 'application/json', temperature: 0.2, abortSignal: abort.signal },
     });
-    return response.text ?? '';
+    const out = response.text ?? '';
+    if (!out) {
+      const block = response.promptFeedback?.blockReason;
+      if (block) throw new AiError(classifyThrown(new Error(`blocked: ${block}`)));
+    }
+    return out;
   } catch (err) {
-    throw new AiError(abort.signal.aborted ? 'The AI took too long to answer' : `AI request failed: ${(err as Error).message}`);
+    if (err instanceof AiError) throw err;
+    const failure = classifyThrown(err, abort.signal.aborted);
+    console.error(`Gemini call failed [${failure.code}]:`, (err as Error).message?.slice(0, 500));
+    throw new AiError(failure);
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function callModel(req: ModelRequest): Promise<string> {
+  if (config.aiStub) return stubResponse(req);
+  if (!config.googleApiKey) throw new AiError(notConfigured());
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await callModelOnce(req);
+    } catch (err) {
+      const wait = err instanceof AiError ? inlineWaitSeconds(err.failure, attempt) : null;
+      if (wait === null) throw err;
+      await sleep(wait * 1000);
+    }
+  }
+}
+
+// What to tell the browser about any error thrown while doing AI work for one item.
+export function failureOf(err: unknown): AiFailure {
+  if (err instanceof AiError) return err.failure;
+  return { code: 'AI_ERROR', retryable: false, fatal: false, message: `Something went wrong: ${(err as Error).message}` };
 }
 
 export function modelName(): string {
@@ -58,8 +105,8 @@ export function modelName(): string {
 
 function extractJson(textOut: string): unknown {
   const match = textOut.match(/\{[\s\S]*\}/);
-  if (!match) throw new AiError('The AI reply did not contain a result');
-  try { return JSON.parse(match[0]); } catch { throw new AiError('The AI reply could not be read'); }
+  if (!match) throw new AiError(badReply('Gemini\'s reply did not contain a result'));
+  try { return JSON.parse(match[0]); } catch { throw new AiError(badReply('Gemini\'s reply could not be read')); }
 }
 
 // One retry if the reply can't be parsed.
@@ -69,10 +116,10 @@ async function generateJson<T>(req: ModelRequest, schema: z.ZodType<T>): Promise
     try {
       const parsed = schema.safeParse(extractJson(await callModel(req)));
       if (parsed.success) return parsed.data;
-      lastErr = new AiError('The AI reply was not in the expected format');
+      lastErr = new AiError(badReply('Gemini\'s reply was not in the expected format'));
     } catch (err) {
       lastErr = err;
-      if (!(err instanceof AiError) || /took too long|not configured|request failed/.test(err.message)) throw err;
+      if (!(err instanceof AiError) || err.failure.code !== 'AI_BAD_REPLY') throw err;
     }
   }
   throw lastErr;
@@ -133,7 +180,7 @@ export async function aiMarkClip(clip: ClipContext, opts: AiMarkOptions): Promis
   const marks = wantMarks
     ? Math.min(clip.max_marks, Math.max(0, Math.round(Number.isFinite(reply.marks) ? reply.marks! : 0)))
     : null;
-  if (wantMarks && reply.marks === undefined) throw new AiError('The AI reply had no mark');
+  if (wantMarks && reply.marks === undefined) throw new AiError(badReply('Gemini\'s reply had no mark'));
 
   const fieldsToSave = {
     ai_reasoning: reply.reasoning,
@@ -168,7 +215,7 @@ export async function aiJudgePair(
   const clips = await db('script_clips').whereIn('id', [pair.clip_a_id, pair.clip_b_id]).select<{ id: string; clip_image_url: string }[]>('id', 'clip_image_url');
   const a = clips.find((c) => c.id === pair.clip_a_id);
   const b = clips.find((c) => c.id === pair.clip_b_id);
-  if (!a || !b) throw new AiError('A script in this pair no longer exists');
+  if (!a || !b) throw new AiError({ code: 'AI_ERROR', retryable: false, fatal: false, message: 'A script in this pair no longer exists' });
 
   const parts: Part[] = [
     text(`You are an experienced examiner. Compare two anonymous student responses to question ${question.question_number} (worth ${question.max_marks} marks) and decide which is the better response (against the mark scheme when one is provided, otherwise on overall quality). Never mention or guess the students' identities. Reply only with JSON.`),

@@ -125,11 +125,77 @@ def _gemini_model_name() -> str:
     return os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 
+# Gemini errors are passed to the API as structured detail so it can explain them in plain language
+# (rate limit, busy, key problem...) instead of a bare "500". The API owns the wording.
+_TRANSIENT_STATES = {"UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED"}
+
+
+def _details_list(exc: Exception) -> list:
+    """Gemini's error body carries a list of typed details (quota violations, RetryInfo...)."""
+    body = getattr(exc, "details", None)
+    inner = body.get("error", body) if isinstance(body, dict) else None
+    items = inner.get("details") if isinstance(inner, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def _gemini_error_detail(exc: Exception) -> dict:
+    code = getattr(exc, "code", None)
+    return {
+        "code": "GEMINI_ERROR",
+        "gemini_status": code if isinstance(code, int) else None,
+        "gemini_state": getattr(exc, "status", None),
+        "message": getattr(exc, "message", None) or str(exc),
+        "details": _details_list(exc),
+    }
+
+
+def _retry_delay_seconds(exc: Exception) -> float | None:
+    """The wait Gemini asked for on a rate limit, from RetryInfo or 'Please retry in 12.3s'."""
+    import re
+    for d in _details_list(exc):
+        if isinstance(d, dict) and str(d.get("@type", "")).endswith("RetryInfo"):
+            m = re.match(r"^([\d.]+)s$", str(d.get("retryDelay", "")))
+            if m:
+                return float(m.group(1))
+    m = re.search(r"retry in ([\d.]+)\s*s", str(getattr(exc, "message", "") or exc), re.I)
+    return float(m.group(1)) if m else None
+
+
+def _generate_with_retry(call, attempts: int = 3):
+    """Run a Gemini call, retrying briefly on busy/internal errors and short rate limits.
+    Anything else, or a longer wait, is raised as an HTTP 502 carrying Gemini's own error."""
+    import time
+    from google.genai import errors as genai_errors
+    for attempt in range(attempts):
+        try:
+            response = call()
+            return response.text.strip() if response.text else ""
+        except genai_errors.APIError as exc:
+            status = getattr(exc, "code", None)
+            state = getattr(exc, "status", None)
+            wait = None
+            if status == 429 or state == "RESOURCE_EXHAUSTED":
+                delay = _retry_delay_seconds(exc)
+                if delay is not None and delay <= 15:
+                    wait = delay + 1
+            elif state in _TRANSIENT_STATES or (isinstance(status, int) and status >= 500):
+                wait = 2 if attempt == 0 else 5
+            logger.warning("Gemini error (attempt %d/%d): %s %s %s", attempt + 1, attempts, status, state, str(exc)[:300])
+            if wait is None or attempt == attempts - 1:
+                raise HTTPException(status_code=502, detail=_gemini_error_detail(exc))
+            time.sleep(wait)
+        except Exception as exc:  # network failures and the like
+            logger.error("Gemini call failed: %s", exc)
+            if attempt == attempts - 1:
+                raise HTTPException(status_code=502, detail={"code": "GEMINI_ERROR", "gemini_status": None, "gemini_state": None, "message": f"fetch failed: {exc}", "details": None})
+            time.sleep(2 if attempt == 0 else 5)
+
+
 def _gemini_client():
     from google import genai
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+        raise HTTPException(status_code=503, detail={"code": "GEMINI_NOT_CONFIGURED", "message": "GEMINI_API_KEY not configured"})
     return genai.Client(api_key=api_key)
 
 
@@ -259,28 +325,23 @@ def ocr(req: OcrRequest):
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Cannot access image: {exc}")
 
-    try:
-        client = _gemini_client()
-        from google.genai import types
-        prompt = (
-            "You are a handwriting transcription assistant. "
-            "Transcribe exactly what is written in the image. "
-            "Preserve line breaks. Do not add commentary, corrections, or formatting. "
-            "If the image is blank or illegible, return an empty string."
-        )
-        response = client.models.generate_content(
+    client = _gemini_client()
+    from google.genai import types
+    prompt = (
+        "You are a handwriting transcription assistant. "
+        "Transcribe exactly what is written in the image. "
+        "Preserve line breaks. Do not add commentary, corrections, or formatting. "
+        "If the image is blank or illegible, return an empty string."
+    )
+    text = _generate_with_retry(
+        lambda: client.models.generate_content(
             model=_gemini_model_name(),
             contents=[
                 prompt,
                 types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
             ],
         )
-        text = response.text.strip() if response.text else ""
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("Gemini OCR failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"OCR failed: {exc}")
+    )
 
     return OcrResponse(text=text)
 
