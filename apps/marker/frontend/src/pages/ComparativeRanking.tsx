@@ -5,6 +5,8 @@ import { api, HttpError } from '../api';
 import { AppLink, Button, Card, LinkButton, ProgressBar } from '../components/ui';
 import { PageHeader } from '../components/PageHeader';
 import { useBatchRunner } from '../hooks/useBatchRunner';
+import { estimateRun } from '../lib/duration';
+import { AiRunNotice } from '../components/AiRunNotice';
 
 export function ComparativeRanking() {
   const { examId, questionId } = useParams<{ examId: string; questionId: string }>();
@@ -54,7 +56,7 @@ export function ComparativeRanking() {
     setPlan(null);
     runner.start(ids, async (batch) => {
       const res = await api.compareAiStep(examId!, questionId!, batch, guidance, useExamples);
-      return res.data.results.map((r) => ({ id: r.pair_id, ok: r.ok, error: r.error }));
+      return res.data.results.map((r) => ({ id: r.pair_id, ok: r.ok, error: r.error, code: r.code, retryable: r.retryable, fatal: r.fatal, retryAfter: r.retry_after_seconds }));
     });
   }
 
@@ -198,6 +200,7 @@ export function ComparativeRanking() {
                     <p>
                       <strong>{plan.total}</strong> comparison{plan.total === 1 ? '' : 's'} will be sent to Gemini (two anonymous images each
                       {useExamples ? ', plus a few reference comparisons' : ''}). Names are blacked out on the clips.
+                      {estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0) && ` To stay within Gemini's limits this will take ${estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0)}; you can leave this page open and pause at any time.`}
                     </p>
                     <div className="flex gap-2">
                       <Button variant="primary" disabled={plan.total === 0} onClick={startAi}>Start</Button>
@@ -210,10 +213,10 @@ export function ComparativeRanking() {
                   </Button>
                 )}
                 {planMut.error && <p role="alert" className="mt-2 text-sm text-red-700">{(planMut.error as Error).message}</p>}
-                {runner.state.fatal && <p role="alert" className="mt-2 text-sm text-red-700">Stopped: {runner.state.fatal}</p>}
+                <AiRunNotice state={runner.state} onResume={runner.resume} onDismiss={runner.reset} />
                 {runner.state.status === 'done' && (
                   <p className="mt-2 text-sm text-green-700">
-                    AI judging finished{runner.state.failed.length > 0 && `, but ${runner.state.failed.length} comparison${runner.state.failed.length === 1 ? '' : 's'} failed (${runner.state.failed[0].error}). Run it again to retry them`}.
+                    AI judging finished{runner.state.failed.length > 0 && `, but ${runner.state.failed.length} comparison${runner.state.failed.length === 1 ? '' : 's'} failed (details above). Run it again to retry them`}.
                     <button className="ml-2 text-indigo-600 underline" onClick={() => { runner.reset(); refresh(); }}>Refresh results</button>
                   </p>
                 )}

@@ -7,7 +7,8 @@ import { fileIdFromUri, getDriveMediaRequest, isDriveUri } from '../services/dri
 import { describeExtractorFailure, extractorFetch } from '../services/extractor.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireClipAccess, requireQuestionAccess, type ClipContext } from '../services/access.js';
-import { aiMarkClip, modelName } from '../services/ai.js';
+import { aiMarkClip, failureOf, modelName } from '../services/ai.js';
+import { classifyGemini, failureBody, httpStatusFor, notConfigured, type GeminiErrorInput } from '../services/aiErrors.js';
 import { convertedUrl, renderConvertedPage, saveConvertedImage, stripTextLayer } from '../services/converted.js';
 import type { AiPlan, AiResultRow, AiResults, AiStepResult } from '@marker/shared-types';
 
@@ -16,7 +17,7 @@ const router = Router();
 const aiConfigured = () => config.aiStub || Boolean(config.googleApiKey);
 
 router.get('/ai/status', requireAuth, (_req, res) => {
-  res.json({ data: { configured: aiConfigured(), model: modelName() } });
+  res.json({ data: { configured: aiConfigured(), model: modelName(), max_rpm: config.aiStub ? 0 : config.geminiMaxRpm } });
 });
 
 // ── Convert handwriting to text ─────────────────────────────────────────────
@@ -57,11 +58,28 @@ router.post('/clips/:id/ocr', requireAuth, async (req, res, next) => {
             body: JSON.stringify({ image_url: image.url, image_headers: image.headers }),
           });
         } catch (err) {
-          res.status(502).json({ error: `Could not reach the text recognition service: ${describeExtractorFailure(err)}`, code: 'EXTRACTOR_UNREACHABLE' }); return;
+          console.error('OCR: extractor unreachable:', describeExtractorFailure(err));
+        res.status(502).json({ error: `The handwriting service could not be reached (${describeExtractorFailure(err)}). Try again in a moment.`, code: 'EXTRACTOR_UNREACHABLE', retryable: true }); return;
         }
         if (!resp.ok) {
-          console.error(`OCR failed (${resp.status}):`, await resp.text());
-          res.status(502).json({ error: `Text recognition failed (service returned ${resp.status})`, code: 'OCR_ERROR' }); return;
+          const bodyText = await resp.text();
+          console.error(`OCR failed (${resp.status}):`, bodyText.slice(0, 500));
+          // The extractor passes Gemini's own error through as structured detail, so it can be explained
+          let detail: (GeminiErrorInput & { code?: string; gemini_status?: number; gemini_state?: string }) | undefined;
+          try { detail = (JSON.parse(bodyText) as { detail?: typeof detail }).detail; } catch { /* not JSON */ }
+          if (detail && typeof detail === 'object' && detail.code === 'GEMINI_NOT_CONFIGURED') {
+            const f = notConfigured();
+            res.status(httpStatusFor(f)).json(failureBody(f)); return;
+          }
+          if (detail && typeof detail === 'object' && detail.code === 'GEMINI_ERROR') {
+            const f = classifyGemini({ status: detail.gemini_status, state: detail.gemini_state, message: detail.message, details: detail.details });
+            res.status(httpStatusFor(f)).json(failureBody(f)); return;
+          }
+          const why = typeof detail === 'string' ? ` (${String(detail).slice(0, 160)})` : '';
+          res.status(502).json({
+            error: `Handwriting conversion failed on the server (code ${resp.status})${why}. Try again; if it keeps happening, tell an administrator.`,
+            code: 'OCR_ERROR', retryable: true,
+          }); return;
         }
         text = ((await resp.json()) as { text: string }).text;
       }
@@ -170,8 +188,12 @@ router.post('/exams/:id/ai-mark/step', requireAuth, async (req, res, next) => {
         });
         return { clip_id: clipId, ok: true, marks_awarded: out.marks_awarded };
       } catch (err) {
-        console.error(`AI marking failed for clip ${clipId}:`, (err as Error).message);
-        return { clip_id: clipId, ok: false, error: (err as Error).message };
+        const failure = failureOf(err);
+        console.error(`AI marking failed for clip ${clipId} [${failure.code}]:`, (err as Error).message);
+        return {
+          clip_id: clipId, ok: false, error: failure.message, code: failure.code,
+          retryable: failure.retryable, fatal: failure.fatal, retry_after_seconds: failure.retry_after_seconds,
+        };
       }
     }));
     res.json({ data: { results } });

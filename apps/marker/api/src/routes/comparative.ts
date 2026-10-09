@@ -4,7 +4,7 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireQuestionAccess } from '../services/access.js';
-import { aiJudgePair } from '../services/ai.js';
+import { aiJudgePair, failureOf } from '../services/ai.js';
 import { neighbourPairs, orient, pairKey, randomPairs } from '../services/ranking.js';
 import { computeRanking } from '../services/rankingData.js';
 import type { ComparativeNextPair, ComparativeStatus } from '@marker/shared-types';
@@ -211,8 +211,12 @@ router.post(`${base}/ai-judge/step`, requireAuth, async (req, res, next) => {
         await aiJudgePair(pair, q, { guidance: body.guidance, useExamples: body.use_examples });
         return { pair_id: id, ok: true };
       } catch (err) {
-        console.error(`AI judging failed for pair ${id}:`, (err as Error).message);
-        return { pair_id: id, ok: false, error: (err as Error).message };
+        const failure = failureOf(err);
+        console.error(`AI judging failed for pair ${id} [${failure.code}]:`, (err as Error).message);
+        return {
+          pair_id: id, ok: false, error: failure.message, code: failure.code,
+          retryable: failure.retryable, fatal: failure.fatal, retry_after_seconds: failure.retry_after_seconds,
+        };
       }
     }));
     res.json({ data: { results } });
