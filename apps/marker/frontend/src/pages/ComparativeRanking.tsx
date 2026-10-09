@@ -5,6 +5,7 @@ import { api, HttpError } from '../api';
 import { AppLink, Button, Card, LinkButton, ProgressBar } from '../components/ui';
 import { PageHeader } from '../components/PageHeader';
 import { useBatchRunner } from '../hooks/useBatchRunner';
+import { estimateRun } from '../lib/duration';
 import { AiRunNotice } from '../components/AiRunNotice';
 
 export function ComparativeRanking() {
@@ -199,6 +200,7 @@ export function ComparativeRanking() {
                     <p>
                       <strong>{plan.total}</strong> comparison{plan.total === 1 ? '' : 's'} will be sent to Gemini (two anonymous images each
                       {useExamples ? ', plus a few reference comparisons' : ''}). Names are blacked out on the clips.
+                      {estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0) && ` To stay within Gemini's limits this will take ${estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0)}; you can leave this page open and pause at any time.`}
                     </p>
                     <div className="flex gap-2">
                       <Button variant="primary" disabled={plan.total === 0} onClick={startAi}>Start</Button>

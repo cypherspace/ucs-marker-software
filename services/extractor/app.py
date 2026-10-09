@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -161,12 +162,43 @@ def _retry_delay_seconds(exc: Exception) -> float | None:
     return float(m.group(1)) if m else None
 
 
+_pace_lock = threading.Lock()
+_next_slot = 0.0
+
+
+def _pace_gemini(max_wait: float = 60.0) -> None:
+    """Space Gemini calls out to GEMINI_MAX_RPM per minute (default 6; 0 = no limit) so a free-tier key is
+    not hit faster than it allows. Calls queue in order. Raise the limit once the key is on a paid plan."""
+    import time
+    global _next_slot
+    try:
+        rpm = float(os.environ.get("GEMINI_MAX_RPM", "6"))
+    except ValueError:
+        rpm = 6.0
+    if rpm <= 0:
+        return
+    with _pace_lock:
+        now = time.monotonic()
+        slot = max(now, _next_slot)
+        wait = slot - now
+        if wait > max_wait:
+            # Reported like a Gemini rate limit so the API explains it the same way
+            raise HTTPException(status_code=502, detail={
+                "code": "GEMINI_ERROR", "gemini_status": 429, "gemini_state": "RESOURCE_EXHAUSTED",
+                "message": f"Queued behind other requests. Please retry in {int(wait) + 1}s.", "details": [],
+            })
+        _next_slot = slot + 60.0 / rpm
+    if wait > 0:
+        time.sleep(wait)
+
+
 def _generate_with_retry(call, attempts: int = 3):
     """Run a Gemini call, retrying briefly on busy/internal errors and short rate limits.
     Anything else, or a longer wait, is raised as an HTTP 502 carrying Gemini's own error."""
     import time
     from google.genai import errors as genai_errors
     for attempt in range(attempts):
+        _pace_gemini()
         try:
             response = call()
             return response.text.strip() if response.text else ""

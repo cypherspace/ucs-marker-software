@@ -35,6 +35,9 @@ export const config = {
   storageBucket: process.env.STORAGE_BUCKET,
   googleApiKey: process.env.GOOGLE_API_KEY ?? '',
   geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
+  // Gemini requests per minute this server will make (the free tier allows only a few). Calls beyond it are
+  // queued, not failed. Raise it, or set 0 for no limit, once the key is on a paid plan.
+  geminiMaxRpm: Number(process.env.GEMINI_MAX_RPM ?? 6),
   googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? '',
   googleOAuthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
   publicUrl: process.env.PUBLIC_URL ?? '',

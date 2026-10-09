@@ -17,7 +17,7 @@ const router = Router();
 const aiConfigured = () => config.aiStub || Boolean(config.googleApiKey);
 
 router.get('/ai/status', requireAuth, (_req, res) => {
-  res.json({ data: { configured: aiConfigured(), model: modelName() } });
+  res.json({ data: { configured: aiConfigured(), model: modelName(), max_rpm: config.aiStub ? 0 : config.geminiMaxRpm } });
 });
 
 // ── Convert handwriting to text ─────────────────────────────────────────────

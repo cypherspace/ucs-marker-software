@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Button, Card, ProgressBar } from '../components/ui';
 import { useBatchRunner } from '../hooks/useBatchRunner';
+import { estimateRun } from '../lib/duration';
 import { AiRunNotice } from '../components/AiRunNotice';
 import type { AiMode, AiPlan, AiScopeType, AiStrictness } from '@marker/shared-types';
 
@@ -202,6 +203,7 @@ export function AiMarking() {
             <p>
               <strong>{plan.total}</strong> clip{plan.total === 1 ? '' : 's'} will be sent to Gemini
               {useExamples ? ', each with a few reference examples' : ''}. This uses your Gemini quota.
+              {estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0) && ` To stay within Gemini's limits this will take ${estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0)}; you can leave this page open and pause at any time.`}
               {plan.total === 0 && ' There is nothing to do for these settings.'}
             </p>
             <div className="flex gap-2">

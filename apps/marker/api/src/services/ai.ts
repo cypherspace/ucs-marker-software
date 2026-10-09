@@ -8,6 +8,7 @@ import { humanMarkFor, judgementAnchors, markingAnchors } from './anchors.js';
 import type { ClipContext, QuestionContext } from './access.js';
 import type { AiMode, AiStrictness } from '@marker/shared-types';
 import { badReply, classifyThrown, notConfigured, type AiFailure } from './aiErrors.js';
+import { createPacer, QueueTooLong } from './rateLimit.js';
 
 export type Part = { text: string } | { inlineData: { mimeType: string; data: string } };
 
@@ -35,6 +36,10 @@ function inlineWaitSeconds(f: AiFailure, attempt: number): number | null {
 
 const MODEL_TIMEOUT_MS = 90_000;
 
+// Every Gemini call (including retries) takes its turn here. A queue longer than 2 minutes is not held in
+// one request (Cloud Run allows 300 s): the browser is told to wait instead, and tries again.
+const pacer = createPacer({ rpm: config.geminiMaxRpm, maxWaitMs: 120_000 });
+
 const image = (buf: Buffer): Part => ({ inlineData: { mimeType: 'image/png', data: buf.toString('base64') } });
 const text = (t: string): Part => ({ text: t });
 
@@ -54,6 +59,15 @@ function stubResponse(req: ModelRequest): string {
 }
 
 async function callModelOnce(req: ModelRequest): Promise<string> {
+  try {
+    await pacer.acquire();
+  } catch (err) {
+    if (!(err instanceof QueueTooLong)) throw err;
+    throw new AiError({
+      code: 'AI_RATE_LIMITED', retryable: true, fatal: false, retry_after_seconds: err.waitSeconds,
+      message: `Other Gemini requests are queued ahead of this one. Try again in about ${err.waitSeconds} seconds.`,
+    });
+  }
   const ai = new GoogleGenAI({ apiKey: config.googleApiKey });
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), MODEL_TIMEOUT_MS);
