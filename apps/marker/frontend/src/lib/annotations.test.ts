@@ -50,3 +50,24 @@ describe('nextNumber', () => {
     expect(nextNumber([a({ number: 3 }), a({ number: 1 })])).toBe(4);
   });
 });
+
+import { annotationMark } from './annotations';
+const at = (type: Annotation['type']): Annotation => ({ id: type + Math.random(), type, x: 1, y: 1 } as Annotation);
+
+describe('annotationMark', () => {
+  it('is null until something worth a mark is placed', () => {
+    expect(annotationMark({ annotations: [] })).toBeNull();
+    expect(annotationMark({ annotations: [at('tick'), at('circle')] })).toBeNull();
+    expect(annotationMark(null)).toBeNull();
+  });
+  it('counts one mark per mark tick', () => {
+    expect(annotationMark({ annotations: [at('mark_tick'), at('mark_tick'), at('tick')] })).toBe(2);
+  });
+  it('treats a cross on its own as zero marks, plain or numbered', () => {
+    expect(annotationMark({ annotations: [at('cross')] })).toBe(0);
+    expect(annotationMark({ annotations: [at('numbered_cross')] })).toBe(0);
+  });
+  it('lets mark ticks win over a cross', () => {
+    expect(annotationMark({ annotations: [at('cross'), at('mark_tick')] })).toBe(1);
+  });
+});

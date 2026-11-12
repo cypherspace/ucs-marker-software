@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { sortWithinGroups } from '../services/questionLabel.js';
 
 const router = Router();
 
@@ -35,7 +36,7 @@ router.get('/home', requireAuth, async (req, res, next) => {
     }
 
     // Clips this teacher still has to mark: same rule as the marking queue.
-    const markingRows = (await db.raw(
+    let markingRows = (await db.raw(
       `SELECT ma.exam_id, e.name AS exam_name, e.created_at AS exam_created, eq.id AS question_id, eq.question_number,
               COUNT(sc.id) AS clips_total,
               COUNT(sc.id) FILTER (WHERE sm.id IS NULL) AS clips_left
@@ -53,6 +54,7 @@ router.get('/home', requireAuth, async (req, res, next) => {
       exam_id: string; exam_name: string; question_id: string; question_number: string;
       clips_total: string; clips_left: string;
     }[];
+    markingRows = sortWithinGroups(markingRows, (r) => r.exam_id);
     const next = markingRows.find((r) => num(r.clips_left) > 0) ?? null;
     const marking = {
       assigned_questions: markingRows.length,
@@ -89,7 +91,7 @@ router.get('/home', requireAuth, async (req, res, next) => {
     )).rows[0] as { ai_marked: string };
 
     // Comparisons a teacher can still judge on questions assigned to them.
-    const compRows = (await db.raw(
+    let compRows = (await db.raw(
       `SELECT e.id AS exam_id, e.name AS exam_name, eq.id AS question_id, eq.question_number,
               COUNT(p.id) FILTER (WHERE h.id IS NULL) AS pairs_left
          FROM marking_assignments ma
@@ -102,6 +104,7 @@ router.get('/home', requireAuth, async (req, res, next) => {
         ORDER BY e.created_at, eq.question_number`,
       { uid },
     )).rows as { exam_id: string; exam_name: string; question_id: string; question_number: string; pairs_left: string }[];
+    compRows = sortWithinGroups(compRows, (r) => r.exam_id);
     const compNext = compRows.find((r) => num(r.pairs_left) > 0) ?? null;
 
     const summary: Record<string, unknown> = {

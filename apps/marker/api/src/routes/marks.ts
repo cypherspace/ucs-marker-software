@@ -6,6 +6,7 @@ import { getClipBytes } from '../services/clipImages.js';
 import { convertedUrl } from '../services/converted.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireClipAccess, requireQuestionAccess } from '../services/access.js';
+import { sortByQuestionLabel } from '../services/questionLabel.js';
 
 const router = Router();
 
@@ -243,7 +244,7 @@ router.get('/my-exams', requireAuth, async (req, res, next) => {
         .join('marking_assignments as ma', 'ma.question_id', 'eq.id')
         .where({ 'ma.exam_id': exam.id, 'ma.teacher_id': teacherId })
         .select('eq.*');
-      return { ...exam, assigned_questions: questions };
+      return { ...exam, assigned_questions: sortByQuestionLabel(questions as { question_number: string }[]) };
     }));
 
     // How many clips each assigned question has, and how many this teacher still has to finish

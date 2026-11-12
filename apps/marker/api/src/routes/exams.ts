@@ -7,6 +7,7 @@ import { recordAudit } from '../services/audit.js';
 import { storage } from '../services/storage.js';
 import { isDriveUri } from '../services/drive.js';
 import { requireExamMember } from '../services/access.js';
+import { normaliseQuestionLabel, sortByQuestionLabel } from '../services/questionLabel.js';
 
 const router = Router();
 
@@ -146,10 +147,8 @@ router.patch('/:id', requireAuth, requireRole(['teacher', 'admin']), async (req,
 router.get('/:id/questions', requireAuth, async (req, res, next) => {
   try {
     if (!(await requireExamMember(req, res, req.params.id))) return;
-    const rows = await db('exam_questions')
-      .where({ exam_id: req.params.id })
-      .orderBy('question_number');
-    res.json({ data: rows });
+    const rows = await db('exam_questions').where({ exam_id: req.params.id });
+    res.json({ data: sortByQuestionLabel(rows as { question_number: string }[]) });
   } catch (err) {
     next(err);
   }
@@ -165,13 +164,14 @@ async function requireExamEditor(req: Request, res: Response, examId: string): P
   return true;
 }
 
+// 2(a)(i) and 2ai are the same question, so labels are compared in their canonical form
 async function questionNumberTaken(examId: string, questionNumber: string, exceptId?: string): Promise<boolean> {
-  const row = await db('exam_questions')
+  const wanted = normaliseQuestionLabel(questionNumber).toLowerCase();
+  const rows = await db('exam_questions')
     .where({ exam_id: examId })
-    .whereRaw('LOWER(question_number) = LOWER(?)', [questionNumber.trim()])
     .modify((qb) => { if (exceptId) qb.whereNot({ id: exceptId }); })
-    .first('id');
-  return Boolean(row);
+    .select<{ question_number: string }[]>('question_number');
+  return rows.some((r) => normaliseQuestionLabel(r.question_number).toLowerCase() === wanted);
 }
 
 // Create/upsert question regions
@@ -196,6 +196,7 @@ router.post('/:id/questions', requireAuth, requireRole(['teacher', 'admin']), as
       })).optional(),
     });
     const body = QuestionSchema.parse(req.body);
+    body.question_number = normaliseQuestionLabel(body.question_number);
     if (await questionNumberTaken(req.params.id, body.question_number)) {
       res.status(409).json({ error: `Question ${body.question_number} already exists in this exam`, code: 'DUPLICATE_QUESTION' }); return;
     }
@@ -238,6 +239,7 @@ router.patch('/:examId/questions/:questionId', requireAuth, requireRole(['teache
       })).nullable().optional(),
     });
     const body = UpdateSchema.parse(req.body);
+    if (body.question_number !== undefined) body.question_number = normaliseQuestionLabel(body.question_number);
     if (body.question_number !== undefined &&
         await questionNumberTaken(req.params.examId, body.question_number, req.params.questionId)) {
       res.status(409).json({ error: `Question ${body.question_number} already exists in this exam`, code: 'DUPLICATE_QUESTION' }); return;
@@ -335,7 +337,7 @@ router.get('/:id/assignments', requireAuth, async (req, res, next) => {
         'ma.exam_id', 'ma.teacher_id', 'u.email as teacher_email', 'u.name as teacher_name',
         'ma.question_id', 'eq.question_number', 'ma.assigned_at',
       );
-    res.json({ data: rows });
+    res.json({ data: sortByQuestionLabel(rows as { question_number: string }[]) });
   } catch (err) {
     next(err);
   }
@@ -344,6 +346,7 @@ router.get('/:id/assignments', requireAuth, async (req, res, next) => {
 // Assign teacher to question
 router.post('/:id/assignments', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
   try {
+    if (!(await requireExamEditor(req, res, req.params.id))) return;
     const body = z.object({
       teacher_id: z.string().uuid(),
       question_id: z.string().uuid(),
@@ -357,9 +360,43 @@ router.post('/:id/assignments', requireAuth, requireRole(['teacher', 'admin']), 
   }
 });
 
+// Several changes for one teacher at once: assign them to some questions and take them off others.
+// Applied together, so a failure leaves nothing half done.
+router.post('/:id/assignments/bulk', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    if (!(await requireExamEditor(req, res, req.params.id))) return;
+    const body = z.object({
+      teacher_id: z.string().uuid(),
+      add: z.array(z.string().uuid()).max(500).default([]),
+      remove: z.array(z.string().uuid()).max(500).default([]),
+    }).parse(req.body);
+    const teacher = await db('users').where({ id: body.teacher_id }).whereNull('disabled_at').first('id');
+    if (!teacher) { res.status(404).json({ error: 'Teacher not found', code: 'NOT_FOUND' }); return; }
+    const wanted = [...new Set([...body.add, ...body.remove])];
+    const valid = await db('exam_questions').where({ exam_id: req.params.id }).whereIn('id', wanted).select<{ id: string }[]>('id');
+    if (valid.length !== wanted.length) {
+      res.status(400).json({ error: 'One of those questions is not part of this exam', code: 'INVALID_QUESTION' }); return;
+    }
+    await db.transaction(async (trx) => {
+      if (body.add.length) {
+        await trx('marking_assignments')
+          .insert(body.add.map((question_id) => ({ exam_id: req.params.id, teacher_id: body.teacher_id, question_id, assigned_by: req.user!.sub })))
+          .onConflict(['exam_id', 'teacher_id', 'question_id']).ignore();
+      }
+      if (body.remove.length) {
+        await trx('marking_assignments').where({ exam_id: req.params.id, teacher_id: body.teacher_id }).whereIn('question_id', body.remove).delete();
+      }
+    });
+    res.json({ data: { added: body.add.length, removed: body.remove.length } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Remove assignment
 router.delete('/:id/assignments', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
   try {
+    if (!(await requireExamEditor(req, res, req.params.id))) return;
     const body = z.object({
       teacher_id: z.string().uuid(),
       question_id: z.string().uuid(),
@@ -397,8 +434,7 @@ router.get('/:id/progress', requireAuth, async (req, res, next) => {
          FROM exam_questions eq
          LEFT JOIN script_clips sc ON sc.question_id = eq.id
         WHERE eq.exam_id = ?
-        GROUP BY eq.id, eq.question_number, eq.max_marks, eq.marking_mode
-        ORDER BY eq.question_number`,
+        GROUP BY eq.id, eq.question_number, eq.max_marks, eq.marking_mode`,
       [req.params.id],
     )).rows as {
       question_id: string; question_number: string; max_marks: number; marking_mode: string;
@@ -420,7 +456,7 @@ router.get('/:id/progress', requireAuth, async (req, res, next) => {
     res.json({
       data: {
         exam_id: req.params.id,
-        questions: questions.map((q) => ({
+        questions: sortByQuestionLabel(questions).map((q) => ({
           question_id: q.question_id,
           question_number: q.question_number,
           max_marks: q.max_marks,

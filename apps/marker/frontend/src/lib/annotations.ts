@@ -13,6 +13,18 @@ export function markTickTotal(data: AnnotationData | null | undefined): number {
   return (data?.annotations ?? []).filter((a) => a.type === 'mark_tick').length;
 }
 
+const CROSS_TYPES: ReadonlySet<string> = new Set(['cross', 'numbered_cross']);
+
+/**
+ * The mark the annotations add up to by themselves: one per Mark tick; else 0 if the answer has been crossed
+ * (a cross means nothing earned); else null (nothing placed yet, so the marker still has to decide).
+ */
+export function annotationMark(data: AnnotationData | null | undefined): number | null {
+  const ticks = markTickTotal(data);
+  if (ticks > 0) return ticks;
+  return (data?.annotations ?? []).some((a) => CROSS_TYPES.has(a.type)) ? 0 : null;
+}
+
 /** The point annotation nearest to (x, y) within `radius`, or null. The newest wins a tie. */
 export function findPointAt(annotations: readonly Annotation[], x: number, y: number, radius = HIT_RADIUS): Annotation | null {
   let best: Annotation | null = null;

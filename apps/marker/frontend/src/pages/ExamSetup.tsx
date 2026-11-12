@@ -11,6 +11,9 @@ import { ClipRunPanel } from '../components/ClipRunPanel';
 import { Button } from '../components/ui';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 import { useUploadQueue } from '../hooks/useUploadQueue';
+import { QuestionLabelInput } from '../components/QuestionLabelInput';
+import { questionLabel } from '../lib/questionLabel';
+import { AssignTeachers } from '../components/AssignTeachers';
 
 type SetupTab = 'scripts' | 'questions' | 'assign';
 
@@ -118,7 +121,7 @@ export function ExamSetup() {
 
   async function deleteQuestion(q: ExamQuestion) {
     setQuestionError(null);
-    if (!window.confirm(`Delete question ${q.question_number}?`)) return;
+    if (!window.confirm(`Delete question ${questionLabel(q.question_number)}?`)) return;
     try {
       await api.deleteQuestion(id!, q.id);
     } catch (e) {
@@ -171,13 +174,6 @@ export function ExamSetup() {
     }
   }
 
-  // ── Assignments ───────────────────────────────────────────────────────────
-  const [assignTeacher, setAssignTeacher] = useState('');
-  const [assignQuestion, setAssignQuestion] = useState('');
-  const assignMutation = useMutation({
-    mutationFn: () => api.createAssignment(id!, { teacher_id: assignTeacher, question_id: assignQuestion }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['assignments', id] }),
-  });
 
   if (examQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
@@ -332,7 +328,7 @@ export function ExamSetup() {
           {reclip && (
             <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <span className="min-w-0 flex-1">
-                Regions for Q{reclip.question.question_number} changed, so its {reclip.clips} generated clip{reclip.clips === 1 ? '' : 's'} use the old crop.
+                Regions for Q{questionLabel(reclip.question.question_number)} changed, so its {reclip.clips} generated clip{reclip.clips === 1 ? '' : 's'} use the old crop.
                 {reclip.marked > 0 && ` ${reclip.marked} of them ${reclip.marked === 1 ? 'has' : 'have'} already been marked on the old crop.`}
               </span>
               <button
@@ -340,7 +336,7 @@ export function ExamSetup() {
                 disabled={clipBusy}
                 className="rounded-lg bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
               >
-                {clipBusy ? 'Re-clipping…' : `Re-clip Q${reclip.question.question_number}`}
+                {clipBusy ? 'Re-clipping…' : `Re-clip Q${questionLabel(reclip.question.question_number)}`}
               </button>
               <button onClick={() => setReclip(null)} className="rounded-lg px-3 py-1.5 text-amber-800 hover:bg-amber-100">Not now</button>
               {clipJob?.error && <span className="w-full text-red-700">{clipJob.error}</span>}
@@ -375,16 +371,7 @@ export function ExamSetup() {
                   <div key={q.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                     {isEditing ? (
                       <>
-                        <label className="flex items-center gap-1 text-sm text-slate-500">
-                          Q
-                          <input
-                            type="text"
-                            value={editNumber}
-                            onChange={(e) => setEditNumber(e.target.value)}
-                            aria-label="Question number"
-                            className="w-20 rounded border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                          />
-                        </label>
+                        <QuestionLabelInput key={q.id} value={editNumber} onChange={setEditNumber} />
                         <label className="flex items-center gap-1 text-sm text-slate-500">
                           <input
                             type="number"
@@ -415,7 +402,7 @@ export function ExamSetup() {
                       </>
                     ) : (
                       <>
-                        <span className="w-12 font-medium text-slate-700">Q{q.question_number}</span>
+                        <span className="min-w-12 font-medium text-slate-700">Q{questionLabel(q.question_number)}</span>
                         <span className="text-sm text-slate-500">{q.max_marks} marks</span>
                         {clips > 0 && <span className="text-xs text-slate-400">{clips} clip{clips === 1 ? '' : 's'}</span>}
                         <label
@@ -497,53 +484,7 @@ export function ExamSetup() {
 
       {/* Assign teachers tab */}
       {tab === 'assign' && (
-        <div className="space-y-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="font-medium text-slate-700 mb-3">Assign Teachers to Questions</h2>
-            <div className="flex gap-3 flex-wrap">
-              <select
-                value={assignTeacher}
-                onChange={(e) => setAssignTeacher(e.target.value)}
-                className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-              >
-                <option value="">Select teacher…</option>
-                {teachers.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
-              </select>
-              <select
-                value={assignQuestion}
-                onChange={(e) => setAssignQuestion(e.target.value)}
-                className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-              >
-                <option value="">Select question…</option>
-                {questions.map((q: ExamQuestion) => <option key={q.id} value={q.id}>Q{q.question_number} ({q.max_marks}m)</option>)}
-              </select>
-              <button
-                onClick={() => assignMutation.mutate()}
-                disabled={!assignTeacher || !assignQuestion || assignMutation.isPending}
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                Assign
-              </button>
-            </div>
-          </div>
-
-          {assignments.length > 0 && (
-            <div className="rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
-              {assignments.map((a) => (
-                <div key={`${a.teacher_id}-${a.question_id}`} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                  <span className="text-slate-700">{a.teacher_email}</span>
-                  <span className="text-slate-500">→ Q{a.question_number}</span>
-                  <button
-                    onClick={() => api.deleteAssignment(id!, { teacher_id: a.teacher_id, question_id: a.question_id }).then(() => qc.invalidateQueries({ queryKey: ['assignments', id] }))}
-                    className="text-xs text-slate-400 hover:text-red-500"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <AssignTeachers examId={id!} teachers={teachers} questions={questions} assignments={assignments} />
       )}
 
       {clipper && (

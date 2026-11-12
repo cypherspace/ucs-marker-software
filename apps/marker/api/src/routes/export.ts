@@ -5,6 +5,7 @@ import { requireExamMember } from '../services/access.js';
 import { computeRanking } from '../services/rankingData.js';
 import { classFilterFrom, loadResultRows, scopeFor, type ResultRow } from '../services/results.js';
 import type { ExamResults, ResultsRow } from '@marker/shared-types';
+import { sortByQuestionLabel } from '../services/questionLabel.js';
 
 const router = Router();
 
@@ -44,7 +45,7 @@ router.get('/exams/:id/results', requireAuth, requireRole(['teacher', 'admin']),
         marking_mode: r.marking_mode as 'marks' | 'comparative',
       });
     }
-    const questions = [...questionMap.values()].sort((a, b) => byNumber(a.question_number, b.question_number));
+    const questions = sortByQuestionLabel([...questionMap.values()]);
 
     const byScript = new Map<string, ResultsRow>();
     for (const r of rows) {

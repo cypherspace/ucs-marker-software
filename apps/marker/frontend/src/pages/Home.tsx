@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { api } from '../api';
 import { AppLink, Card, LinkButton, ProgressBar, StatusPill } from '../components/ui';
+import { questionLabel } from '../lib/questionLabel';
 
 function Icon({ children }: { children: ReactNode }) {
   return (
@@ -112,7 +113,7 @@ export function Home() {
               <ProgressBar value={marking.clips_total - marking.clips_left} max={marking.clips_total} label="My marking progress" />
               <p className="text-sm text-slate-500">
                 {plural(marking.assigned_questions, 'question')} in {plural(marking.exams, 'exam')}
-                {marking.next && <> · next: {marking.next.exam_name}, Q{marking.next.question_number}</>}
+                {marking.next && <> · next: {marking.next.exam_name}, Q{questionLabel(marking.next.question_number)}</>}
               </p>
             </>
           )}
@@ -176,7 +177,7 @@ export function Home() {
                   {comparative.pairs_left} <span className="text-base font-normal text-slate-500">to judge</span>
                 </p>
                 <p className="text-sm text-slate-500">
-                  {comparative.next && <>Next: {comparative.next.exam_name}, Q{comparative.next.question_number}. </>}
+                  {comparative.next && <>Next: {comparative.next.exam_name}, Q{questionLabel(comparative.next.question_number)}. </>}
                   You choose how many to judge in each sitting.
                 </p>
               </>

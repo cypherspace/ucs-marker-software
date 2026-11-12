@@ -181,6 +181,13 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     }),
+  // Assign one teacher to several questions and/or take them off others, in one go
+  bulkAssign: (examId: string, body: { teacher_id: string; add: string[]; remove: string[] }) =>
+    http<ApiSuccess<{ added: number; removed: number }>>(`${A}/${examId}/assignments/bulk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
   deleteAssignment: (examId: string, body: { teacher_id: string; question_id: string }) =>
     http<ApiSuccess<{ ok: true }>>(`${A}/${examId}/assignments`, {
       method: 'DELETE',
