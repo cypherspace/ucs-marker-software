@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useOutletContext, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { AppLink, Card, LinkButton, ProgressBar } from '../components/ui';
+import { questionLabel } from '../lib/questionLabel';
 
 export function ExamProgress() {
   const { id } = useParams<{ id: string }>();
@@ -28,7 +29,7 @@ export function ExamProgress() {
             <Card key={q.question_id} className="p-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <span className="font-medium text-slate-800">Question {q.question_number}</span>
+                  <span className="font-medium text-slate-800">Question {questionLabel(q.question_number)}</span>
                   <span className="ml-2 text-sm text-slate-500">
                     {comparative ? 'ranked by comparison' : `(${q.max_marks} marks)`}
                   </span>
@@ -43,7 +44,7 @@ export function ExamProgress() {
               </div>
               {!comparative && (
                 <>
-                  <ProgressBar value={q.marked_clips} max={q.total_clips} label={`Question ${q.question_number} marking progress`} />
+                  <ProgressBar value={q.marked_clips} max={q.total_clips} label={`Question ${questionLabel(q.question_number)} marking progress`} />
                   {(q.ai_marked_clips > 0 || q.covered_clips > q.marked_clips) && (
                     <p className="mt-2 text-xs text-slate-500">
                       {q.ai_marked_clips} also marked by the AI · {q.covered_clips} of {q.total_clips} have a mark that counts

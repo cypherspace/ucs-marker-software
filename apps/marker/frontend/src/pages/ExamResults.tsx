@@ -4,6 +4,7 @@ import { useOutletContext, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card } from '../components/ui';
 import type { Exam } from '@marker/shared-types';
+import { questionLabel } from '../lib/questionLabel';
 
 // undefined = every class; null = scripts with no class; a string = that class
 type ClassChoice = string | null | undefined;
@@ -114,7 +115,7 @@ export function ExamResults() {
                   return (
                     <tr key={q.id}>
                       <td className="px-4 py-2 font-medium text-slate-800">
-                        Q{q.question_number} <span className="font-normal text-slate-500">{q.marking_mode === 'comparative' ? 'ranked' : `out of ${q.max_marks}`}</span>
+                        Q{questionLabel(q.question_number)} <span className="font-normal text-slate-500">{q.marking_mode === 'comparative' ? 'ranked' : `out of ${q.max_marks}`}</span>
                       </td>
                       <td className="px-4 py-2">{s?.marked ?? 0} of {s?.scripts ?? 0}</td>
                       <td className="px-4 py-2">{s?.mean ?? '–'}</td>
@@ -136,7 +137,7 @@ export function ExamResults() {
                 <tr>
                   <th className="px-4 py-2">Student</th>
                   {showClassColumn && <th className="px-4 py-2">Class</th>}
-                  {r.questions.map((q) => <th key={q.id} className="px-3 py-2 text-center">Q{q.question_number}</th>)}
+                  {r.questions.map((q) => <th key={q.id} className="px-3 py-2 text-center">Q{questionLabel(q.question_number)}</th>)}
                   <th className="px-4 py-2 text-center">Total</th>
                 </tr>
               </thead>

@@ -3,6 +3,8 @@ import type { ClipRegion, ExamQuestion } from '@marker/shared-types';
 import { api } from '../api';
 import { Button } from './ui';
 import { ScriptClipEditor } from './ScriptClipEditor';
+import { QuestionLabelInput } from './QuestionLabelInput';
+import { questionLabel, suggestNextQuestionLabel } from '../lib/questionLabel';
 import {
   CoordinatePicker, fromQuestionRegions, toClipRegions, toNameZones,
   type DrawnRegion, type RegionType,
@@ -41,14 +43,6 @@ interface Props {
 const strip = (rs: DrawnRegion[]) =>
   rs.map(({ type, page, x, y, width, height }) => [type, page, Math.round(x), Math.round(y), Math.round(width), Math.round(height)]);
 
-// 1 -> 2, 1a -> 1b; anything else is left for the teacher to type
-export function suggestNextNumber(last: string | undefined): string {
-  if (!last) return '1';
-  if (/^\d+$/.test(last)) return String(Number(last) + 1);
-  const m = last.match(/^(\d+)([a-y])$/i);
-  return m ? `${m[1]}${String.fromCharCode(m[2].charCodeAt(0) + 1)}` : '';
-}
-
 const msRegionsOf = (q: ExamQuestion | undefined): DrawnRegion[] =>
   q ? fromQuestionRegions({ ms_clip_coordinates: q.ms_clip_coordinates }) : [];
 
@@ -77,7 +71,8 @@ export function QuestionClipper(props: Props) {
   const msQuestion = onMarkScheme ? questions[msIndex] : undefined;
 
   // ── Add mode: the question being typed, and the ones already added ────────
-  const [number, setNumber] = useState(() => suggestNextNumber(questions[questions.length - 1]?.question_number));
+  const [number, setNumber] = useState(() => suggestNextQuestionLabel(questions[questions.length - 1]?.question_number));
+  const [labelKey, setLabelKey] = useState(0); // remounts the label boxes when a suggestion replaces them
   const [marks, setMarks] = useState('');
   const [added, setAdded] = useState<{ number: string; marks: number }[]>([]);
   const addedCount = useRef(0);
@@ -110,19 +105,19 @@ export function QuestionClipper(props: Props) {
   // In add mode a question is "in progress" once something has been drawn or a mark typed
   const hasWork = mode === 'add' ? drawn.length > 0 || marks !== '' : dirty;
 
-  function showRegions(next: DrawnRegion[], jumpToFirst = false) {
+  function showRegions(next: DrawnRegion[]) {
     setRegions(next);
     baseline.current = strip(next);
     setEpoch((e) => e + 1);
-    if (jumpToFirst) setPage(next.find((r) => r.type === mainType)?.page ?? 1);
   }
 
   // ── Add mode ──────────────────────────────────────────────────────────────
   function problemWithNewQuestion(): string | null {
     const n = number.trim();
-    if (!n) return 'Enter the question number, for example 1 or 2a.';
-    if (questions.some((q) => q.question_number === n) || added.some((a) => a.number === n)) {
-      return `Question ${n} already exists. Use a different number.`;
+    if (!n) return 'Enter the question number, then a part and sub-part if it has them, for example 2, a, i.';
+    const same = (x: string) => questionLabel(x).toLowerCase() === questionLabel(n).toLowerCase();
+    if (questions.some((q) => same(q.question_number)) || added.some((a) => same(a.number))) {
+      return `Question ${questionLabel(n)} already exists. Use a different number, part or sub-part.`;
     }
     const m = Number(marks);
     if (marks === '' || !Number.isInteger(m) || m < 1 || m > 100) return 'Enter the marks for this question, a whole number from 1 to 100.';
@@ -152,7 +147,8 @@ export function QuestionClipper(props: Props) {
     addedCount.current += 1;
     setAdded((a) => [...a, { number: number.trim(), marks: Number(marks) }]);
     nameZones.current = regions.filter((r) => r.type === 'name_zone');
-    setNumber(suggestNextNumber(number.trim()));
+    setNumber(suggestNextQuestionLabel(number.trim()));
+    setLabelKey((k) => k + 1);
     setMarks('');
     showRegions(nameZones.current.map((r) => ({ ...r })));
     onChanged();
@@ -211,7 +207,8 @@ export function QuestionClipper(props: Props) {
     setMsIndex(index);
     const q = questions[index];
     const coords = msSaved[q.id] ?? q.ms_clip_coordinates ?? [];
-    showRegions(msRegionsOf({ ...q, ms_clip_coordinates: coords }), true);
+    // Stay on the page being viewed: the next question is usually further down the same mark scheme page
+    showRegions(msRegionsOf({ ...q, ms_clip_coordinates: coords }));
     setError(null);
   }
 
@@ -235,8 +232,8 @@ export function QuestionClipper(props: Props) {
 
   // ── Layout ────────────────────────────────────────────────────────────────
   const title = mode === 'add' ? 'Add questions'
-    : mode === 'edit' ? `Regions: Q${question?.question_number ?? ''}`
-    : `Mark scheme: Q${msQuestion?.question_number ?? ''}`;
+    : mode === 'edit' ? `Regions: Q${questionLabel(question?.question_number ?? '')}`
+    : `Mark scheme: Q${questionLabel(msQuestion?.question_number ?? '')}`;
   const lastPage = pageCount ?? Infinity;
   const pagesWithRegions = new Set(regions.filter((r) => r.type === mainType).map((r) => r.page));
   const noSource = onMarkScheme ? false : !templateScriptId;
@@ -323,17 +320,7 @@ export function QuestionClipper(props: Props) {
         {/* Add mode: the question being added */}
         {mode === 'add' && (
           <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm">
-            <label className="flex items-center gap-1.5 text-slate-600">
-              Question
-              <input
-                type="text"
-                value={number}
-                onChange={(e) => setNumber(e.target.value)}
-                placeholder="e.g. 1a"
-                aria-label="Question number"
-                className="w-20 rounded border border-slate-300 px-2 py-1 focus:border-indigo-500 focus:outline-none"
-              />
-            </label>
+            <QuestionLabelInput key={labelKey} value={number} onChange={setNumber} />
             <label className="flex items-center gap-1.5 text-slate-600">
               <input
                 type="number"
@@ -354,7 +341,7 @@ export function QuestionClipper(props: Props) {
               <span className="ml-auto flex flex-wrap items-center gap-1 text-xs" aria-label="Questions added so far">
                 {added.map((a) => (
                   <span key={a.number} className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700">
-                    Q{a.number} · {a.marks}
+                    Q{questionLabel(a.number)} · {a.marks}
                   </span>
                 ))}
               </span>
@@ -381,7 +368,7 @@ export function QuestionClipper(props: Props) {
                       : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-100'
                   }`}
                 >
-                  Q{q.question_number}{has ? ' ✓' : ''}
+                  Q{questionLabel(q.question_number)}{has ? ' ✓' : ''}
                 </button>
               );
             })}

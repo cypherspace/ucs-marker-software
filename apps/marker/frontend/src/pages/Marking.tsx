@@ -8,6 +8,7 @@ import { AppLink, buttonClass, Card, LinkButton, ProgressBar, StatusPill } from 
 import { arrangeMarking, needsMarking, sortExams, type ExamSort, type MarkFilter, type MarkSort } from '../lib/listing';
 import { useViewPref } from '../lib/viewPrefs';
 import type { AssignedQuestion, Exam } from '@marker/shared-types';
+import { questionLabel } from '../lib/questionLabel';
 
 const examDetails = (e: Exam) => [e.subject, e.year_group, e.exam_board].filter(Boolean).join(' · ');
 
@@ -121,13 +122,13 @@ function QuestionRow({ examId, q }: { examId: string; q: AssignedQuestion }) {
   return (
     <li className="rounded-lg border border-slate-200 p-3">
       <div className="mb-2 flex items-baseline justify-between gap-2">
-        <span className="font-medium text-slate-800">Question {q.question_number}</span>
+        <span className="font-medium text-slate-800">Question {questionLabel(q.question_number)}</span>
         <span className="text-xs text-slate-500">{comparative ? 'ranked by comparison' : `${q.max_marks} ${q.max_marks === 1 ? 'mark' : 'marks'}`}</span>
       </div>
       {!comparative && (
         q.clips_total > 0 ? (
           <div className="mb-3">
-            <ProgressBar value={done} max={q.clips_total} label={`Question ${q.question_number} marked`} />
+            <ProgressBar value={done} max={q.clips_total} label={`Question ${questionLabel(q.question_number)} marked`} />
             <div className="mt-1 text-xs text-slate-500">
               {q.clips_left > 0 ? `${done} of ${q.clips_total} marked` : `All ${q.clips_total} marked`}
             </div>
@@ -205,7 +206,7 @@ export function AiMarkingOverview() {
                     <ul className="divide-y divide-slate-100 rounded-lg border border-slate-100">
                       {questions.map((q) => (
                         <li key={q.question_id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 text-sm">
-                          <span className="w-24 font-medium text-slate-800">Question {q.question_number}</span>
+                          <span className="w-24 font-medium text-slate-800">Question {questionLabel(q.question_number)}</span>
                           <span className="text-slate-600">{q.marked_clips} of {q.total_clips} marked by teachers</span>
                           <span className="text-slate-600">{q.ai_marked_clips} marked by AI</span>
                           <AppLink
@@ -266,7 +267,7 @@ export function ComparativeOverview() {
                 <h3 className="mb-2 font-semibold text-slate-800">{exam.name}</h3>
                 <div className="flex flex-wrap gap-2">
                   {questions.map((q) => (
-                    <LinkButton key={q.id} to={`/compare/${exam.id}/${q.id}`} variant="secondary">Question {q.question_number}</LinkButton>
+                    <LinkButton key={q.id} to={`/compare/${exam.id}/${q.id}`} variant="secondary">Question {questionLabel(q.question_number)}</LinkButton>
                   ))}
                 </div>
               </Card>
@@ -284,7 +285,7 @@ export function ComparativeOverview() {
                 <div className="flex flex-wrap gap-2">
                   {questions.map((q) => (
                     <LinkButton key={q.question_id} to={`/compare/${exam.id}/${q.question_id}/ranking`} variant="secondary">
-                      Question {q.question_number} ranking
+                      Question {questionLabel(q.question_number)} ranking
                     </LinkButton>
                   ))}
                 </div>

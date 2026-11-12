@@ -8,6 +8,7 @@ import { useBatchRunner } from '../hooks/useBatchRunner';
 import { estimateRun } from '../lib/duration';
 import { AiRunNotice } from '../components/AiRunNotice';
 import type { AiMode, AiPlan, AiScopeType, AiStrictness } from '@marker/shared-types';
+import { questionLabel } from '../lib/questionLabel';
 
 const SCOPES: [AiScopeType, string, string][] = [
   ['unmarked', 'Clips with no AI result yet', 'Skips anything the AI has already done.'],
@@ -114,7 +115,7 @@ export function AiMarking() {
             className="max-w-xs rounded border border-slate-300 px-2 py-2 text-sm font-normal"
           >
             {questions.map((q) => (
-              <option key={q.id} value={q.id}>Q{q.question_number} ({q.max_marks} marks)</option>
+              <option key={q.id} value={q.id}>Q{questionLabel(q.question_number)} ({q.max_marks} marks)</option>
             ))}
           </select>
         </label>

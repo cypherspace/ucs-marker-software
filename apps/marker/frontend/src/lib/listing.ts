@@ -1,3 +1,4 @@
+import { compareQuestionLabels } from './questionLabel';
 // Sorting and filtering for the exam and marking lists, kept apart from the pages so it can be tested.
 
 const byText = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
@@ -64,8 +65,8 @@ export function arrangeMarking<Q extends MarkQuestionLike, E extends MarkExamLik
   exams: readonly E[], opts: { filter: MarkFilter; sort: MarkSort },
 ): E[] {
   const questionOrder = (a: Q, b: Q) => (opts.sort === 'left'
-    ? Number(needsMarking(b)) - Number(needsMarking(a)) || b.clips_left - a.clips_left || byText(a.question_number, b.question_number)
-    : byText(a.question_number, b.question_number));
+    ? Number(needsMarking(b)) - Number(needsMarking(a)) || b.clips_left - a.clips_left || compareQuestionLabels(a.question_number, b.question_number)
+    : compareQuestionLabels(a.question_number, b.question_number));
   const shaped = exams
     .map((e) => ({
       ...e,

@@ -5,15 +5,17 @@ import { useBackTarget } from '../lib/nav';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
 import { AnnotationCanvas } from '../components/AnnotationCanvas';
-import { AnnotationToolbar, COLORS, type Tool } from '../components/AnnotationToolbar';
+import { AnnotationToolbar, COLORS, TOOLS, type Tool } from '../components/AnnotationToolbar';
 import { DockablePanel } from '../components/DockablePanel';
 import { ScriptClipEditor } from '../components/ScriptClipEditor';
 import { Button } from '../components/ui';
 import { ZoomableImage } from '../components/ZoomableImage';
 import { ZoomControls } from '../components/ZoomControls';
 import { useZoom } from '../hooks/useZoom';
-import { markTickTotal, nextNumber } from '../lib/annotations';
+import { annotationMark, markTickTotal, nextNumber } from '../lib/annotations';
+import { usePersistedState } from '../hooks/usePersistedState';
 import type { Annotation, AnnotationData, QueueClip } from '@marker/shared-types';
+import { questionLabel } from '../lib/questionLabel';
 
 // Loads one clip (the one in the URL, else the first this teacher hasn't finished).
 // The panel below is keyed by clip id, so ticks and typed marks can never carry over to another script.
@@ -86,23 +88,25 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   const initialAnnotations: AnnotationData = clip.converted_url
     ? savedAnnotations
     : { annotations: savedAnnotations.annotations.filter((a) => a.layer !== 'text') };
-  const initialTicks = markTickTotal(initialAnnotations);
-  // `typed` is null while the Marks box simply follows the Mark ticks; typing a different number overrides them.
+  const initialAuto = annotationMark(initialAnnotations);
+  // `typed` is null while the Marks box simply follows the annotations (Mark ticks, or a cross for 0);
+  // typing a different number overrides them.
   const initialTyped = clip.my_mark?.marks_awarded == null
     ? null
-    : (initialTicks > 0 && clip.my_mark.marks_awarded === initialTicks ? null : String(clip.my_mark.marks_awarded));
+    : (initialAuto !== null && clip.my_mark.marks_awarded === initialAuto ? null : String(clip.my_mark.marks_awarded));
 
   const [annotations, setAnnotations] = useState<AnnotationData>(initialAnnotations);
   const [typed, setTyped] = useState<string | null>(initialTyped);
   const [saved, setSaved] = useState(() => snapshot(initialAnnotations, initialTyped));
-  const [showMs, setShowMs] = useState(false);
+  // These choices are remembered in the browser, so they carry over to the next script
+  const [showMs, setShowMs] = usePersistedState<boolean>('marker.ms.open', false, (v): v is boolean => typeof v === 'boolean');
   const [showPages, setShowPages] = useState(false);
   const [showAi, setShowAi] = useState(false);
   // The converted-handwriting page (a saved picture of the transcription), once made
   const [convertedUrl, setConvertedUrl] = useState<string | null>(clip.converted_url);
   const [view, setView] = useState<'script' | 'converted'>('script');
-  const [tool, setTool] = useState<Tool>('mark_tick');
-  const [color, setColor] = useState(COLORS[0]);
+  const [tool, setTool] = usePersistedState<Tool>('marker.tool', 'mark_tick', (v): v is Tool => TOOLS.includes(v as Tool));
+  const [color, setColor] = usePersistedState<string>('marker.color', COLORS[0], (v): v is string => COLORS.includes(v as string));
   const scriptZoom = useZoom('marker.zoom.script');
   const convertedZoom = useZoom('marker.zoom.converted');
   const zoomState = view === 'converted' ? convertedZoom : scriptZoom;
@@ -111,10 +115,15 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   const onLayer = (a: Annotation) => (a.layer ?? 'clip') === layer;
 
   const ticks = markTickTotal(annotations);
-  const marks = typed ?? (ticks > 0 ? String(ticks) : '');
+  const auto = annotationMark(annotations); // from the Mark ticks, or 0 if crossed
+  const marks = typed ?? (auto !== null ? String(auto) : '');
   const marksNum = Number(marks);
   const marksValid = marks !== '' && Number.isInteger(marksNum) && marksNum >= 0 && marksNum <= maxMarks;
-  const overriding = typed !== null && ticks > 0 && typed !== String(ticks);
+  // An empty Marks box is a real answer when saving: nothing earned, recorded as 0. (Drafts left behind when you
+  // move on stay blank, so they never count as marked.)
+  const blank = marks === '';
+  const canSave = marksValid || blank;
+  const overriding = typed !== null && auto !== null && typed !== String(auto);
   const dirty = snapshot(annotations, typed) !== saved;
 
   const listQ = useQuery({
@@ -127,7 +136,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   const saveMutation = useMutation({
     mutationFn: (draft: boolean) => api.saveMark({
       clip_id: clip.id,
-      marks_awarded: marksValid ? marksNum : null,
+      marks_awarded: marksValid ? marksNum : (!draft && blank ? 0 : null),
       annotation_data: annotations,
       draft,
     }),
@@ -215,8 +224,8 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
         <button onClick={async () => { if (dirty) { try { await saveMutation.mutateAsync(true); } catch { return; } } navigate(backTarget.to, { state: backTarget.state }); }}
           className="text-sm font-medium text-indigo-600 hover:underline">← Back to {backTarget.label}</button>
-        <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700" title={`Question ${question.question_number}`}>
-          Q{question.question_number}
+        <span className="rounded bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700" title={`Question ${questionLabel(question.question_number)}`}>
+          Q{questionLabel(question.question_number)}
         </span>
 
         <div className="flex items-center gap-1 text-sm">
@@ -274,7 +283,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
             </button>
           )}
           <button
-            onClick={() => setShowMs((v) => !v)}
+            onClick={() => setShowMs(!showMs)}
             disabled={!clip.ms_url}
             title={clip.ms_url ? 'Show or hide the mark scheme. Drag its title bar to move it.' : 'No mark scheme has been clipped for this question'}
             aria-pressed={showMs}
@@ -329,13 +338,16 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
                     max={maxMarks}
                     step={1}
                     value={marks}
-                    onChange={(e) => setTyped(e.target.value === String(ticks) && ticks > 0 ? null : e.target.value)}
+                    placeholder="0"
+                    onChange={(e) => setTyped(auto !== null && e.target.value === String(auto) ? null : e.target.value)}
                     className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-center text-lg font-semibold focus:border-indigo-500 focus:outline-none"
                   />
                   {overriding && (
                     <p className="mt-1 text-[11px] leading-tight text-slate-500">
                       Typed mark in use.{' '}
-                      <button type="button" onClick={() => setTyped(null)} className="font-medium text-indigo-600 underline">Use tick total ({ticks})</button>
+                      <button type="button" onClick={() => setTyped(null)} className="font-medium text-indigo-600 underline">
+                        {ticks > 0 ? `Use tick total (${ticks})` : 'Use 0 (crossed)'}
+                      </button>
                     </p>
                   )}
                   {marks !== '' && !marksValid && (
@@ -344,13 +356,13 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
                 </div>
                 <Button
                   className="w-full"
-                  disabled={!marksValid || saveMutation.isPending || (!dirty && clip.state === 'marked')}
+                  disabled={!canSave || saveMutation.isPending || (!dirty && clip.state === 'marked')}
                   onClick={() => saveMutation.mutate(false, { onSuccess: refetch })}
                 >
-                  Save
+                  {blank ? 'Save as 0' : 'Save'}
                 </Button>
-                <Button variant="primary" className="w-full" disabled={!marksValid || saveMutation.isPending} onClick={() => void saveAndNext()}>
-                  {saveMutation.isPending ? 'Saving…' : 'Save & Next →'}
+                <Button variant="primary" className="w-full" disabled={!canSave || saveMutation.isPending} onClick={() => void saveAndNext()}>
+                  {saveMutation.isPending ? 'Saving…' : blank ? 'Save as 0 & Next →' : 'Save & Next →'}
                 </Button>
                 <p className="min-h-4 text-center text-xs text-slate-500" aria-live="polite">{statusText}</p>
                 {saveMutation.error && (
@@ -438,7 +450,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
         <ScriptClipEditor
           scriptId={clip.script_id}
           questionId={question.id}
-          questionNumber={question.question_number}
+          questionNumber={questionLabel(question.question_number)}
           defaultRegions={question.clip_coordinates}
           defaultNameZones={question.name_zones}
           onClose={() => setShowPages(false)}

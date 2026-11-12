@@ -1,6 +1,7 @@
 import { db } from '../db.js';
 import { finalMarks } from './finalMark.js';
 import type { ExamAccess } from './access.js';
+import { sortWithinGroups } from './questionLabel.js';
 
 // What a person may see of an exam's results. The lead teacher and admins see every script and question.
 // Anyone else sees the scripts they uploaded (their own class, all questions) and, for the questions
@@ -40,7 +41,7 @@ export interface ResultRow {
 
 /** One row per visible script and question. The mark that counts is the teacher's, else the AI's. */
 export async function loadResultRows(examId: string, scope: ResultsScope, cls: ClassFilter = {}): Promise<ResultRow[]> {
-  return db('student_scripts as ss')
+  const rows = await db('student_scripts as ss')
     .join('script_clips as sc', 'sc.script_id', 'ss.id')
     .join('exam_questions as eq', 'eq.id', 'sc.question_id')
     .leftJoin(finalMarks('fm'), 'fm.clip_id', 'sc.id')
@@ -75,6 +76,8 @@ export async function loadResultRows(examId: string, scope: ResultsScope, cls: C
       'aim.marks_awarded as ai_marks_awarded',
       'aim.ai_feedback',
     );
+  // Scripts stay in student-number order; within a script the questions follow question order (1, 2(a), 2(b), 10), not text order
+  return sortWithinGroups(rows, (r) => r.script_id);
 }
 
 export function classFilterFrom(query: Record<string, unknown>): ClassFilter {
