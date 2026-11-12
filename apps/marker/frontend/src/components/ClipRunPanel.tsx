@@ -8,22 +8,25 @@ interface Props {
   finished: boolean;
   error: string | null;
   label: (scriptId: string) => string;
+  // Scripts that already had all their clips and were left alone (a run that only does what is missing)
+  alreadyClipped?: number;
   onPause: () => void;
   onResume: () => void;
   onDismiss: () => void;
 }
 
 // Progress for clipping a class a few scripts at a time
-export function ClipRunPanel({ state, finishing, finished, error, label, onPause, onResume, onDismiss }: Props) {
+export function ClipRunPanel({ state, finishing, finished, error, label, alreadyClipped = 0, onPause, onResume, onDismiss }: Props) {
   const handled = state.done + state.failed.length;
   const running = state.status === 'running';
   const message =
     error ? error
-    : finished ? `Finished: ${state.done} script${state.done === 1 ? '' : 's'} clipped${state.failed.length ? `, ${state.failed.length} failed` : ''}.`
+    : finished && state.total === 0 ? `Nothing new to clip: all ${alreadyClipped} script${alreadyClipped === 1 ? ' has' : 's have'} their clips already.`
+    : finished ? `Finished: ${state.done} script${state.done === 1 ? '' : 's'} clipped${state.failed.length ? `, ${state.failed.length} failed` : ''}${alreadyClipped ? ` (${alreadyClipped} already clipped, left alone)` : ''}.`
     : finishing ? 'Finishing up (mark scheme)…'
     : state.status === 'stopped' ? `Stopped: ${state.fatal ?? 'something went wrong'}`
     : state.status === 'paused' ? `Paused at ${handled} of ${state.total}.`
-    : `Clipping script ${Math.min(handled + 1, state.total)} of ${state.total}…`;
+    : `Clipping script ${Math.min(handled + 1, state.total)} of ${state.total}${alreadyClipped ? ` (${alreadyClipped} already clipped, left alone)` : ''}…`;
 
   return (
     <div role="status" className="space-y-2 border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">

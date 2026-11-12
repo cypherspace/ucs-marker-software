@@ -105,19 +105,24 @@ export const api = {
       body: JSON.stringify(questionIds ? { question_ids: questionIds } : {}),
     }),
   // Clipping in small steps (a class is too much for one request)
-  planClipping: (examId: string, questionIds?: string[]) =>
-    http<ApiSuccess<{ script_ids: string[]; questions: number }>>(`${A}/exams/${examId}/clip/plan`, {
+  // onlyMissing: skip scripts/questions that already have a clip (otherwise everything is cut again)
+  planClipping: (examId: string, questionIds?: string[], onlyMissing = false) =>
+    http<ApiSuccess<{ script_ids: string[]; questions: number; total_scripts: number; already_clipped: number }>>(`${A}/exams/${examId}/clip/plan`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(questionIds ? { question_ids: questionIds } : {}),
+      body: JSON.stringify({ ...(questionIds ? { question_ids: questionIds } : {}), ...(onlyMissing ? { only_missing: true } : {}) }),
     }),
-  clipStep: (examId: string, scriptIds: string[], questionIds?: string[]) =>
+  clipStep: (examId: string, scriptIds: string[], questionIds?: string[], onlyMissing = false) =>
     http<ApiSuccess<{ results: { id: string; ok: boolean; error?: string; clips?: number; kept?: number }[] }>>(
       `${A}/exams/${examId}/clip/step`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ script_ids: scriptIds, ...(questionIds ? { question_ids: questionIds } : {}) }),
+        body: JSON.stringify({
+          script_ids: scriptIds,
+          ...(questionIds ? { question_ids: questionIds } : {}),
+          ...(onlyMissing ? { only_missing: true } : {}),
+        }),
       },
     ),
   finishClipping: (examId: string, questionIds?: string[]) =>
