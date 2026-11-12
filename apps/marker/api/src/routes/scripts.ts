@@ -141,7 +141,12 @@ interface ClipQuestion {
 }
 interface Failure { status: number; error: string; code: string }
 
-const ClipBodySchema = z.object({ question_ids: z.array(z.string().uuid()).optional() });
+// only_missing: leave alone every script/question that already has a clip (adding a few scripts must not
+// re-clip the whole class); without it everything is cut again, which is what changed regions need.
+const ClipBodySchema = z.object({
+  question_ids: z.array(z.string().uuid()).optional(),
+  only_missing: z.boolean().optional(),
+});
 
 // The exam in the URL, if the signed-in user may set it up (its lead teacher, or an admin)
 async function loadLeadExam(req: ExpressRequest, res: ExpressResponse): Promise<ClipExam | null> {
@@ -224,13 +229,15 @@ function clipSignature(q: ClipQuestion | undefined): string | null {
 // Clip every question for one script. Clips chosen by hand for this script are left alone.
 // `fatal` means every other script would fail the same way (the clipping service is down).
 async function clipOneScript(
-  exam: ClipExam, script: ClipScript, questions: ClipQuestion[],
+  exam: ClipExam, script: ClipScript, questions: ClipQuestion[], onlyMissing = false,
 ): Promise<{ made: number; kept: number } | (Failure & { fatal: boolean })> {
-  const manual = new Set((await db('script_clips')
-    .where({ script_id: script.id, clip_source: 'manual' })
+  const existing = await db('script_clips')
+    .where({ script_id: script.id })
     .whereIn('question_id', questions.map((q) => q.id))
-    .select<{ question_id: string }[]>('question_id')).map((r) => r.question_id));
-  const todo = questions.filter((q) => !manual.has(q.id));
+    .select<{ question_id: string; clip_source: string }[]>('question_id', 'clip_source');
+  const manual = new Set(existing.filter((r) => r.clip_source === 'manual').map((r) => r.question_id));
+  const have = new Set(existing.map((r) => r.question_id));
+  const todo = questions.filter((q) => !manual.has(q.id) && !(onlyMissing && have.has(q.id)));
   if (!todo.length) return { made: 0, kept: manual.size };
 
   let src;
@@ -357,10 +364,24 @@ const clipAuth = [requireAuth, requireRole(['teacher', 'admin'])];
 // 1. Which scripts need clipping
 router.post('/exams/:id/clip/plan', ...clipAuth, async (req, res, next) => {
   try {
-    const { question_ids } = ClipBodySchema.parse(req.body ?? {});
+    const { question_ids, only_missing } = ClipBodySchema.parse(req.body ?? {});
     const job = await loadClipJob(req, res, question_ids);
     if (!job) return;
-    res.json({ data: { script_ids: job.scripts.map((s) => s.id), questions: job.questions.length } });
+    let scripts = job.scripts;
+    if (only_missing) {
+      // Only the scripts with at least one question that has no clip yet (new scripts, or new questions)
+      const done = await db('script_clips')
+        .whereIn('script_id', scripts.map((s) => s.id))
+        .whereIn('question_id', job.questions.map((q) => q.id))
+        .select<{ script_id: string; question_id: string }[]>('script_id', 'question_id');
+      const bySript = new Map<string, number>();
+      for (const d of done) bySript.set(d.script_id, (bySript.get(d.script_id) ?? 0) + 1);
+      scripts = scripts.filter((s) => (bySript.get(s.id) ?? 0) < job.questions.length);
+    }
+    res.json({ data: {
+      script_ids: scripts.map((s) => s.id), questions: job.questions.length,
+      total_scripts: job.scripts.length, already_clipped: job.scripts.length - scripts.length,
+    } });
   } catch (err) {
     next(err);
   }
@@ -376,7 +397,7 @@ router.post('/exams/:id/clip/step', ...clipAuth, async (req, res, next) => {
     for (const id of body.script_ids) {
       const script = job.scripts.find((s) => s.id === id);
       if (!script) { results.push({ id, ok: false, error: 'Script not found' }); continue; }
-      const out = await clipOneScript(job.exam, script, job.questions);
+      const out = await clipOneScript(job.exam, script, job.questions, body.only_missing);
       if ('error' in out) {
         if (out.fatal) { res.status(out.status).json({ error: out.error, code: out.code }); return; }
         results.push({ id, ok: false, error: out.error });
@@ -424,13 +445,13 @@ router.post('/exams/:id/mark-scheme/clip', ...clipAuth, async (req, res, next) =
 // Everything in one request (fine for a handful of scripts; the setup page uses the steps above)
 router.post('/exams/:id/clip', ...clipAuth, async (req, res, next) => {
   try {
-    const { question_ids } = ClipBodySchema.parse(req.body ?? {});
+    const { question_ids, only_missing } = ClipBodySchema.parse(req.body ?? {});
     const job = await loadClipJob(req, res, question_ids);
     if (!job) return;
     let made = 0;
     let kept = 0;
     for (const script of job.scripts) {
-      const out = await clipOneScript(job.exam, script, job.questions);
+      const out = await clipOneScript(job.exam, script, job.questions, only_missing);
       if ('error' in out) { res.status(out.status).json({ error: out.error, code: out.code }); return; }
       made += out.made;
       kept = Math.max(kept, out.kept);

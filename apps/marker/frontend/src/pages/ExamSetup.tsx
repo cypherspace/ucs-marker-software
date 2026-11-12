@@ -39,15 +39,17 @@ export function ExamSetup() {
   // ── Script upload ─────────────────────────────────────────────────────────
   // ── Clipping (a few scripts per request, so a whole class can't hit the request time limit) ──
   const clipRunner = useBatchRunner(3);
-  const [clipJob, setClipJob] = useState<{ questionIds?: string[]; finishing: boolean; finished: boolean; error: string | null } | null>(null);
+  const [clipJob, setClipJob] = useState<{ questionIds?: string[]; finishing: boolean; finished: boolean; error: string | null; alreadyClipped?: number } | null>(null);
   const clipBusy = clipRunner.state.status === 'running' || clipRunner.state.status === 'paused' || Boolean(clipJob?.finishing);
 
-  async function runClipping(questionIds?: string[]) {
+  // onlyMissing: clip only what has no clip yet (new scripts, new questions). Without it everything is cut again.
+  async function runClipping(questionIds?: string[], onlyMissing = false) {
     setClipJob({ questionIds, finishing: false, finished: false, error: null });
     try {
-      const plan = await api.planClipping(id!, questionIds);
+      const plan = await api.planClipping(id!, questionIds, onlyMissing);
+      setClipJob((j) => j && { ...j, alreadyClipped: plan.data.already_clipped });
       clipRunner.start(plan.data.script_ids, async (scriptIds) => {
-        const r = await api.clipStep(id!, scriptIds, questionIds);
+        const r = await api.clipStep(id!, scriptIds, questionIds, onlyMissing);
         return r.data.results.map((x) => ({ id: x.id, ok: x.ok, error: x.error }));
       });
     } catch (err) {
@@ -237,14 +239,27 @@ export function ExamSetup() {
             <div className="rounded-lg border border-slate-200 bg-white">
               <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
                 <h2 className="font-medium text-slate-700">{scripts.length} Scripts Uploaded</h2>
-                <button
-                  onClick={() => void runClipping()}
-                  disabled={clipBusy || questions.length === 0}
-                  className="rounded-lg bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                  title={questions.length === 0 ? 'Define questions first' : ''}
-                >
-                  {clipBusy ? 'Clipping…' : 'Generate Clips'}
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      if (window.confirm('Cut every script again, including the ones already clipped? This takes as long as the first time. '
+                        + 'Clips you chose by hand are kept. Use it after changing question regions.')) void runClipping(undefined, false);
+                    }}
+                    disabled={clipBusy || questions.length === 0}
+                    className="text-xs text-slate-500 underline hover:text-slate-700 disabled:opacity-50"
+                    title="Clip every script again, not just the ones that have no clips yet"
+                  >
+                    Re-clip all
+                  </button>
+                  <button
+                    onClick={() => void runClipping(undefined, true)}
+                    disabled={clipBusy || questions.length === 0}
+                    className="rounded-lg bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                    title={questions.length === 0 ? 'Define questions first' : 'Clip the scripts that have no clips yet'}
+                  >
+                    {clipBusy ? 'Clipping…' : 'Generate Clips'}
+                  </button>
+                </div>
               </div>
               {clipJob && (
                 <ClipRunPanel
@@ -252,6 +267,7 @@ export function ExamSetup() {
                   finishing={clipJob.finishing}
                   finished={clipJob.finished}
                   error={clipJob.error}
+                  alreadyClipped={clipJob.alreadyClipped}
                   label={(sid) => `Student ${scripts.find((s) => s.id === sid)?.student_number ?? sid}`}
                   onPause={clipRunner.pause}
                   onResume={clipRunner.resume}
@@ -317,7 +333,7 @@ export function ExamSetup() {
             >
               <span className="min-w-0 flex-1">{notice.text}</span>
               {notice.generate && (
-                <Button variant="primary" onClick={() => { setNotice(null); void runClipping(); }} disabled={clipBusy}>
+                <Button variant="primary" onClick={() => { setNotice(null); void runClipping(undefined, true); }} disabled={clipBusy}>
                   Generate clips now
                 </Button>
               )}
@@ -350,6 +366,7 @@ export function ExamSetup() {
                 finishing={clipJob.finishing}
                 finished={clipJob.finished}
                 error={clipJob.error}
+                  alreadyClipped={clipJob.alreadyClipped}
                 label={(sid) => `Student ${scripts.find((s) => s.id === sid)?.student_number ?? sid}`}
                 onPause={clipRunner.pause}
                 onResume={clipRunner.resume}
