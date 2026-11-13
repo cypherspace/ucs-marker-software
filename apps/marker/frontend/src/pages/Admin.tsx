@@ -6,6 +6,7 @@ import { AppLink, Button, Card, ProgressBar, StatusPill } from '../components/ui
 import type { AuditEntry, OverviewExam } from '@marker/shared-types';
 
 type Role = 'admin' | 'teacher';
+type UserRole = Role | 'student';
 type Tab = 'staff' | 'overview' | 'activity';
 
 const TABS: [Tab, string][] = [['staff', 'Staff'], ['overview', 'Marking overview'], ['activity', 'Activity']];
@@ -72,7 +73,7 @@ function StaffTab({ myId }: { myId: string }) {
   });
   const revoke = useMutation({ mutationFn: (e: string) => api.admin.removeInvite(e), onSuccess: refresh, onError });
   const changeRole = useMutation({
-    mutationFn: ({ id, r }: { id: string; r: Role }) => api.admin.setUserRole(id, r),
+    mutationFn: ({ id, r }: { id: string; r: UserRole }) => api.admin.setUserRole(id, r),
     onSuccess: refresh,
     onError,
   });
@@ -83,6 +84,78 @@ function StaffTab({ myId }: { myId: string }) {
   const users = usersQ.data?.users ?? [];
   const invites = usersQ.data?.invites ?? [];
   const busy = changeRole.isPending || deactivate.isPending || reactivate.isPending;
+  const userCard = (title: string, list: typeof users) => (
+      <Card>
+      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+        <h2 className="font-medium text-slate-700">{title}</h2>
+        <span className="text-xs text-slate-500">{list.length}</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-4 py-2 text-left">Person</th>
+              <th className="px-4 py-2 text-left">Role</th>
+              <th className="px-4 py-2 text-left">Last sign-in</th>
+              <th className="px-4 py-2" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {list.map((u) => {
+              const isMe = u.id === myId;
+              const inactive = Boolean(u.disabled_at);
+              return (
+                <tr key={u.id} className={inactive ? 'bg-slate-50 text-slate-500' : ''}>
+                  <td className="px-4 py-2">
+                    <div className="font-medium">{u.name ?? u.email}{isMe && <span className="ml-2 text-xs font-normal text-slate-400">(you)</span>}</div>
+                    {u.name && <div className="text-xs text-slate-500">{u.email}</div>}
+                    {inactive && <div className="text-xs font-medium text-amber-700">Deactivated</div>}
+                  </td>
+                  <td className="px-4 py-2">
+                    <select
+                      value={u.role}
+                      disabled={isMe || inactive || busy}
+                      onChange={(e) => changeRole.mutate({ id: u.id, r: e.target.value as UserRole })}
+                      aria-label={`Role for ${u.email}`}
+                      title={isMe ? 'You cannot change your own role' : undefined}
+                      className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm disabled:opacity-60"
+                    >
+                      <option value="teacher">Teacher</option>
+                      <option value="admin">Admin</option>
+                      <option value="student">Student</option>
+                    </select>
+                  </td>
+                  <td className="px-4 py-2 text-xs text-slate-500">
+                    {u.last_login_at ? new Date(u.last_login_at).toLocaleDateString() : 'Never'}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {isMe ? null : inactive ? (
+                      <Button variant="secondary" disabled={busy} onClick={() => reactivate.mutate(u.id)}>Reactivate</Button>
+                    ) : (
+                      <Button
+                        variant="danger"
+                        disabled={busy}
+                        onClick={() => {
+                          const warn = u.leads_exams > 0
+                            ? ` They lead ${u.leads_exams} exam${u.leads_exams === 1 ? '' : 's'}; those stay in place but nobody else can manage them until a new lead is set.`
+                            : '';
+                          if (window.confirm(`Deactivate ${u.name ?? u.email}? They will be signed out and unable to sign in. Their marks are kept.${warn}`)) {
+                            deactivate.mutate(u.id);
+                          }
+                        }}
+                      >
+                        Deactivate
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
 
   return (
     <div className="space-y-6">
@@ -127,75 +200,8 @@ function StaffTab({ myId }: { myId: string }) {
         </p>
       </Card>
 
-      <Card>
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <h2 className="font-medium text-slate-700">Staff</h2>
-          <span className="text-xs text-slate-500">{users.length}</span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-4 py-2 text-left">Person</th>
-                <th className="px-4 py-2 text-left">Role</th>
-                <th className="px-4 py-2 text-left">Last sign-in</th>
-                <th className="px-4 py-2" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {users.map((u) => {
-                const isMe = u.id === myId;
-                const inactive = Boolean(u.disabled_at);
-                return (
-                  <tr key={u.id} className={inactive ? 'bg-slate-50 text-slate-500' : ''}>
-                    <td className="px-4 py-2">
-                      <div className="font-medium">{u.name ?? u.email}{isMe && <span className="ml-2 text-xs font-normal text-slate-400">(you)</span>}</div>
-                      {u.name && <div className="text-xs text-slate-500">{u.email}</div>}
-                      {inactive && <div className="text-xs font-medium text-amber-700">Deactivated</div>}
-                    </td>
-                    <td className="px-4 py-2">
-                      <select
-                        value={u.role}
-                        disabled={isMe || inactive || busy}
-                        onChange={(e) => changeRole.mutate({ id: u.id, r: e.target.value as Role })}
-                        aria-label={`Role for ${u.email}`}
-                        title={isMe ? 'You cannot change your own role' : undefined}
-                        className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm disabled:opacity-60"
-                      >
-                        <option value="teacher">Teacher</option>
-                        <option value="admin">Admin</option>
-                      </select>
-                    </td>
-                    <td className="px-4 py-2 text-xs text-slate-500">
-                      {u.last_login_at ? new Date(u.last_login_at).toLocaleDateString() : 'Never'}
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      {isMe ? null : inactive ? (
-                        <Button variant="secondary" disabled={busy} onClick={() => reactivate.mutate(u.id)}>Reactivate</Button>
-                      ) : (
-                        <Button
-                          variant="danger"
-                          disabled={busy}
-                          onClick={() => {
-                            const warn = u.leads_exams > 0
-                              ? ` They lead ${u.leads_exams} exam${u.leads_exams === 1 ? '' : 's'}; those stay in place but nobody else can manage them until a new lead is set.`
-                              : '';
-                            if (window.confirm(`Deactivate ${u.name ?? u.email}? They will be signed out and unable to sign in. Their marks are kept.${warn}`)) {
-                              deactivate.mutate(u.id);
-                            }
-                          }}
-                        >
-                          Deactivate
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      {userCard('Staff', users.filter((u) => u.role !== 'student'))}
+      {users.some((u) => u.role === 'student') && userCard('Students', users.filter((u) => u.role === 'student'))}
 
       <Card>
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">

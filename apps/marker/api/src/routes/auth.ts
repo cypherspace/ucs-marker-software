@@ -4,6 +4,7 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { createSession, destroySession, loadSessionUser } from '../services/sessions.js';
 import { saveRefreshToken } from '../services/drive.js';
+import { isStudentEmail, safeNext } from '../services/studentAuth.js';
 
 const router = Router();
 
@@ -82,6 +83,8 @@ function frontendUrl(req: Request): string {
 }
 
 router.get('/google', (req, res) => {
+  clearCookie(res, FLOW_COOKIE);
+  clearCookie(res, NEXT_COOKIE);
   if (!config.googleOAuthClientId) {
     res.status(500).json({ error: 'OAuth not configured', code: 'AUTH_NOT_CONFIGURED' });
     return;
@@ -96,6 +99,30 @@ router.get('/google', (req, res) => {
     access_type: 'offline',
     prompt: 'consent',
     state,
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+});
+
+const FLOW_COOKIE = 'oauth_flow';
+const NEXT_COOKIE = 'post_login';
+
+// Student sign-in: the same Google sign-in but with the basic profile scopes only. Students are never asked for Drive
+// access and no long-lived Google token is kept for them. `next` is where to go afterwards (a join link or /practice).
+router.get('/google/student', (req, res) => {
+  if (!config.googleOAuthClientId) {
+    res.status(500).json({ error: 'OAuth not configured', code: 'AUTH_NOT_CONFIGURED' });
+    return;
+  }
+  setCookie(res, FLOW_COOKIE, 'student', { maxAge: 600 });
+  const next = safeNext(req.query.next);
+  if (next) setCookie(res, NEXT_COOKIE, next, { maxAge: 600 });
+  const params = new URLSearchParams({
+    client_id: config.googleOAuthClientId,
+    redirect_uri: `${publicUrl(req)}/auth/google/callback`,
+    response_type: 'code',
+    scope: 'openid email profile',
+    prompt: 'select_account',
+    state: signState(),
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
 });
@@ -145,9 +172,13 @@ router.get('/google/callback', async (req, res, next) => {
     if (!claims.email || !emailVerified) { bounceToLogin('unverified_email'); return; }
 
     const email = claims.email.toLowerCase();
+    const studentFlow = readCookie(req, FLOW_COOKIE) === 'student';
+    const afterLogin = safeNext(readCookie(req, NEXT_COOKIE));
+    clearCookie(res, FLOW_COOKIE);
+    clearCookie(res, NEXT_COOKIE);
     let user = await db('users')
       .where({ email })
-      .first<{ id: string; email: string; role: 'admin' | 'teacher'; google_sub: string | null; disabled_at: Date | null }>(
+      .first<{ id: string; email: string; role: 'admin' | 'teacher' | 'student'; google_sub: string | null; disabled_at: Date | null }>(
         'id', 'email', 'role', 'google_sub', 'disabled_at',
       );
     if (user?.disabled_at) { bounceToLogin('deactivated', { email }); return; }
@@ -163,7 +194,13 @@ router.get('/google/callback', async (req, res, next) => {
           .returning(['id', 'email', 'role', 'google_sub']);
         user = created as typeof user;
         await db('allowed_emails').whereRaw('LOWER(email) = ?', [email]).delete();
-      } else if (!config.allowSignup) {
+      } else if (config.studentSignup && isStudentEmail(email, config.studentEmailDomains)) {
+        // Anyone on the school's domain who is not on the staff list is a student
+        const [created] = await db('users')
+          .insert({ email, name: claims.name ?? null, google_sub: claims.sub, role: 'student' })
+          .returning(['id', 'email', 'role', 'google_sub']);
+        user = created as typeof user;
+      } else if (!config.allowSignup || studentFlow) {
         res.redirect(`${frontendUrl(req)}/login?error=not_allowed&email=${encodeURIComponent(email)}`);
         return;
       } else {
@@ -178,10 +215,12 @@ router.get('/google/callback', async (req, res, next) => {
       await db('users').where({ id: user.id }).update({ last_login_at: db.fn.now() });
     }
 
-    if (tokens.refresh_token) await saveRefreshToken(user!.id, tokens.refresh_token);
+    // Students never have a Google Drive token stored
+    if (tokens.refresh_token && user!.role !== 'student') await saveRefreshToken(user!.id, tokens.refresh_token);
     const sid = await createSession(user!.id, req.get('user-agent') ?? undefined);
     setCookie(res, SID_COOKIE, sid, { maxAge: 7 * 24 * 60 * 60 });
-    res.redirect(frontendUrl(req));
+    const home = user!.role === 'student' ? '/practice' : '';
+    res.redirect(`${frontendUrl(req)}${afterLogin ?? home}`);
   } catch (err) {
     next(err);
   }

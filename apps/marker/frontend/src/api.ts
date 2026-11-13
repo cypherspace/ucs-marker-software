@@ -4,6 +4,8 @@ import type {
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
   ComparativeStatus, ComparativeNextPair, Ranking, ClipSettings, ClipRegion, NameZone, ClipListItem,
+  MarkCombine, QuestionAgreement,
+  PracticeSetSummary, PracticeSetDetail, PracticeResults, StudentSetListItem, StudentSetView, StudentItemView, PracticeReveal, StudentSummary,
 } from '@marker/shared-types';
 
 export class HttpError extends Error {
@@ -266,21 +268,78 @@ export const api = {
       }),
 
   // Export
-  exportResults: (examId: string, opts: { names?: boolean; classGroup?: string | null } = {}) => {
+  exportResults: (examId: string, opts: { names?: boolean; classGroup?: string | null; combine?: MarkCombine; perTeacher?: boolean } = {}) => {
     // classGroup: a class name, null for scripts with no class, undefined for everything
     const q = new URLSearchParams();
     if (opts.names) q.set('names', '1');
+    if (opts.combine) q.set('combine', opts.combine);
+    if (opts.perTeacher) q.set('per_teacher', '1');
     if (opts.classGroup === null) q.set('no_class', '1');
     else if (opts.classGroup) q.set('class', opts.classGroup);
     const qs = q.toString();
     return http<ApiSuccess<{ driveUrl?: string; csv?: string; filename?: string }>>(`${A}/exams/${examId}/export${qs ? `?${qs}` : ''}`);
   },
-  getResults: (examId: string, classGroup?: string | null) => {
+  getResults: (examId: string, classGroup?: string | null, combine?: MarkCombine) => {
     const q = new URLSearchParams();
+    if (combine) q.set('combine', combine);
     if (classGroup === null) q.set('no_class', '1');
     else if (classGroup) q.set('class', classGroup);
     const qs = q.toString();
     return http<ApiSuccess<ExamResults>>(`${A}/exams/${examId}/results${qs ? `?${qs}` : ''}`);
+  },
+
+  // Teachers' marks side by side (lead teacher / admin)
+  getAgreement: (examId: string, questionId: string) =>
+    http<ApiSuccess<QuestionAgreement>>(`${A}/exams/${examId}/questions/${questionId}/agreement`),
+
+
+  // Practice marking, teacher side (lead teacher / admin)
+  listPracticeSets: (examId: string) => http<ApiSuccess<PracticeSetSummary[]>>(`${A}/exams/${examId}/practice-sets`),
+  createPracticeSet: (examId: string, body: { name: string; question_ids: string[]; per_question: number; only_settled: boolean; show_mark_scheme: boolean }) =>
+    http<ApiSuccess<PracticeSetSummary>>(`${A}/exams/${examId}/practice-sets`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    }),
+  getPracticeSet: (id: string) => http<ApiSuccess<PracticeSetDetail>>(`${A}/practice-sets/${id}`),
+  addPracticeLink: (id: string, className: string) =>
+    http<ApiSuccess<{ id: string; token: string; url: string }>>(`${A}/practice-sets/${id}/links`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ class_name: className }),
+    }),
+  revokePracticeLink: (linkId: string) => http<ApiSuccess<{ ok: true }>>(`${A}/practice-links/${linkId}/revoke`, { method: 'POST' }),
+  setPracticeClosed: (id: string, closed: boolean) =>
+    http<ApiSuccess<{ ok: true }>>(`${A}/practice-sets/${id}/${closed ? 'close' : 'reopen'}`, { method: 'POST' }),
+  deletePracticeSet: (id: string) => http<ApiSuccess<{ ok: true }>>(`${A}/practice-sets/${id}`, { method: 'DELETE' }),
+  getPracticeResults: (id: string) => http<ApiSuccess<PracticeResults>>(`${A}/practice-sets/${id}/results`),
+  exportPracticeResults: (id: string) =>
+    http<ApiSuccess<{ csv: string; filename: string }>>(`${A}/practice-sets/${id}/results?format=csv`),
+
+  // Practice marking, student side
+  joinPractice: (token: string) =>
+    http<ApiSuccess<{ set_id: string; set_name: string }>>(`${A}/practice/join`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }),
+    }),
+  studentSets: () => http<ApiSuccess<StudentSetListItem[]>>(`${A}/practice/sets`),
+  studentSet: (id: string) => http<ApiSuccess<StudentSetView>>(`${A}/practice/sets/${id}`),
+  studentItem: (id: string) => http<ApiSuccess<StudentItemView>>(`${A}/practice/items/${id}`),
+  submitPractice: (itemId: string, marks: number, annotations: unknown[]) =>
+    http<ApiSuccess<PracticeReveal>>(`${A}/practice/items/${itemId}/submit`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ marks_awarded: marks, annotation_data: annotations }),
+    }),
+  studentSummary: (setId: string) => http<ApiSuccess<StudentSummary>>(`${A}/practice/sets/${setId}/summary`),
+
+  // Annotated scripts (lead teacher / admin): the original PDF with the marking drawn on
+  annotatedScripts: (examId: string) =>
+    http<ApiSuccess<{ exam_name: string; scripts: { id: string; student_number: string; class_group: string | null; clips: number }[] }>>(`${A}/exams/${examId}/annotated-scripts`),
+  annotatedPdf: async (scriptId: string, names: boolean): Promise<{ bytes: Uint8Array; filename: string }> => {
+    const res = await fetch(`${A}/scripts/${scriptId}/annotated.pdf${names ? '?names=1' : ''}`, { credentials: 'include' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
+      throw new HttpError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`, (body as { code?: string }).code);
+    }
+    const disp = res.headers.get('content-disposition') ?? '';
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(disp);
+    const plain = /filename="([^"]+)"/i.exec(disp);
+    return { bytes: new Uint8Array(await res.arrayBuffer()), filename: star ? decodeURIComponent(star[1]) : plain?.[1] ?? 'script.pdf' };
   },
 
   // AI
@@ -314,8 +373,8 @@ export const api = {
       }),
     removeInvite: (email: string) =>
       http<ApiSuccess<{ ok: true }>>(`${ADM}/invites/${encodeURIComponent(email)}`, { method: 'DELETE' }),
-    setUserRole: (id: string, role: 'admin' | 'teacher') =>
-      http<ApiSuccess<{ id: string; email: string; role: 'admin' | 'teacher' }>>(`${ADM}/users/${id}`, {
+    setUserRole: (id: string, role: 'admin' | 'teacher' | 'student') =>
+      http<ApiSuccess<{ id: string; email: string; role: 'admin' | 'teacher' | 'student' }>>(`${ADM}/users/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ role }),

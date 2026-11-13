@@ -10,12 +10,14 @@ const router = Router();
 router.use(requireAuth, requireRole(['admin']));
 
 const RoleSchema = z.enum(['admin', 'teacher']);
+// A person's role can also be set to student (and a student promoted); invites are for staff only
+const UserRoleSchema = z.enum(['admin', 'teacher', 'student']);
 const IdParam = z.string().uuid();
 
 interface UserRow {
   id: string;
   email: string;
-  role: 'admin' | 'teacher';
+  role: 'admin' | 'teacher' | 'student';
   disabled_at: Date | null;
 }
 
@@ -92,7 +94,18 @@ router.get('/users', async (_req, res, next) => {
 router.patch('/users/:id', async (req, res, next) => {
   try {
     const id = IdParam.parse(req.params.id);
-    const { role } = z.object({ role: RoleSchema }).parse(req.body);
+    const { role } = z.object({ role: UserRoleSchema }).parse(req.body);
+    if (role === 'student') {
+      // Someone who leads an exam or has questions to mark cannot become a student without leaving that work stranded
+      const leads = await db('exams').where({ lead_teacher_id: id }).count('id as n').first<{ n: string }>();
+      const marks = await db('marking_assignments').where({ teacher_id: id }).count('* as n').first<{ n: string }>();
+      if (Number(leads?.n ?? 0) > 0 || Number(marks?.n ?? 0) > 0) {
+        res.status(409).json({
+          error: 'That person leads an exam or has questions to mark. Remove that first, then make them a student.',
+          code: 'HAS_STAFF_WORK',
+        }); return;
+      }
+    }
     const target = await changeUser(req, res, id, async (trx) => ({
       guard: role !== 'admin' ? 'removes_admin' : 'none',
       run: async () => { await trx('users').where({ id }).update({ role }); },

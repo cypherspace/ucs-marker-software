@@ -13,7 +13,7 @@ export interface SessionUser {
   id: string;
   email: string;
   name: string | null;
-  role: 'admin' | 'teacher';
+  role: 'admin' | 'teacher' | 'student';
 }
 
 const SESSION_TTL_DAYS = 7;

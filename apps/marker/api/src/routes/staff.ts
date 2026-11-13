@@ -12,6 +12,7 @@ router.get('/teachers', requireAuth, requireRole(['teacher', 'admin']), async (_
     const rows = await db('users')
       .select('id', 'email', 'name')
       .whereNull('disabled_at')
+      .whereIn('role', ['admin', 'teacher'])
       .modify((qb) => { if (!config.authDisabled) qb.whereNot('id', config.adminUserId); })
       .orderBy('email');
     res.json({ data: rows });

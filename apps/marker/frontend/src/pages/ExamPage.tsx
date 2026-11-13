@@ -22,7 +22,7 @@ export function ExamPage() {
 
   // Only the lead teacher (or an admin) sets an exam up
   const isLead = me.role === 'admin' || exam.lead_teacher_id === me.id;
-  if (!isLead && loc.pathname.endsWith('/setup')) return <Navigate to={`/exams/${id}`} replace state={loc.state} />;
+  if (!isLead && (loc.pathname.endsWith('/setup') || loc.pathname.endsWith('/practice'))) return <Navigate to={`/exams/${id}`} replace state={loc.state} />;
 
   // A teacher who is not the lead can upload their own class's scripts if they have a question to mark on this exam
   const canUpload = !isLead && !exam.archived_at && (assignmentsQ.data?.data ?? []).some((a) => a.teacher_id === me.id);
@@ -55,6 +55,7 @@ export function ExamPage() {
           { to: `/exams/${id}`, label: 'Progress', end: true },
           { to: `/exams/${id}/results`, label: 'Results' },
           ...(isLead && !exam.archived_at ? [{ to: `/exams/${id}/setup`, label: 'Setup' }] : []),
+          ...(isLead ? [{ to: `/exams/${id}/practice`, label: 'Student practice' }] : []),
           ...(canUpload ? [{ to: `/exams/${id}/upload`, label: 'Upload scripts' }] : []),
         ]}
       />

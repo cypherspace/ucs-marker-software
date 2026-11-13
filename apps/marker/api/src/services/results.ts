@@ -1,5 +1,6 @@
 import { db } from '../db.js';
 import { finalMarks } from './finalMark.js';
+import type { MarkCombine } from './markCombine.js';
 import type { ExamAccess } from './access.js';
 import { sortWithinGroups } from './questionLabel.js';
 
@@ -40,11 +41,13 @@ export interface ResultRow {
 }
 
 /** One row per visible script and question. The mark that counts is the teacher's, else the AI's. */
-export async function loadResultRows(examId: string, scope: ResultsScope, cls: ClassFilter = {}): Promise<ResultRow[]> {
+export async function loadResultRows(
+  examId: string, scope: ResultsScope, cls: ClassFilter = {}, combine: MarkCombine = 'latest',
+): Promise<ResultRow[]> {
   const rows = await db('student_scripts as ss')
     .join('script_clips as sc', 'sc.script_id', 'ss.id')
     .join('exam_questions as eq', 'eq.id', 'sc.question_id')
-    .leftJoin(finalMarks('fm'), 'fm.clip_id', 'sc.id')
+    .leftJoin(finalMarks('fm', combine), 'fm.clip_id', 'sc.id')
     .leftJoin('script_marks as aim', function () {
       this.on('aim.clip_id', 'sc.id').andOnVal('aim.mark_source', 'ai');
     })

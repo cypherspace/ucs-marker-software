@@ -37,8 +37,11 @@ export function ExamProgress() {
                 {comparative ? (
                   <LinkButton to={`/compare/${id}/${q.question_id}/ranking`} variant="secondary">Ranking</LinkButton>
                 ) : (
-                  <span className="text-sm text-slate-600">
+                  <span className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
                     {q.marked_clips} of {q.total_clips} marked by teachers
+                    {isLead && q.teachers.length > 1 && (
+                      <LinkButton to={`/exams/${id}/agreement/${q.question_id}`} variant="secondary">Compare teachers' marks</LinkButton>
+                    )}
                   </span>
                 )}
               </div>
@@ -52,6 +55,12 @@ export function ExamProgress() {
                     </p>
                   )}
                 </>
+              )}
+              {q.conflict_clips > 0 && (
+                <p className="mt-2 text-xs font-medium text-amber-700">
+                  Teachers gave different marks on {q.conflict_clips} script{q.conflict_clips === 1 ? '' : 's'}.{' '}
+                  {isLead && <AppLink to={`/exams/${id}/agreement/${q.question_id}`} className="underline">See where</AppLink>}
+                </p>
               )}
               {q.manual_clips > 0 && (
                 <p className="mt-2 text-xs text-slate-500">
