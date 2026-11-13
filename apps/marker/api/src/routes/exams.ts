@@ -343,6 +343,11 @@ router.get('/:id/assignments', requireAuth, async (req, res, next) => {
   }
 });
 
+// Only staff (admins and teachers) can be given questions to mark, never a student account
+async function isStaffUser(userId: string): Promise<boolean> {
+  return Boolean(await db('users').where({ id: userId }).whereIn('role', ['admin', 'teacher']).first('id'));
+}
+
 // Assign teacher to question
 router.post('/:id/assignments', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
   try {
@@ -351,6 +356,9 @@ router.post('/:id/assignments', requireAuth, requireRole(['teacher', 'admin']), 
       teacher_id: z.string().uuid(),
       question_id: z.string().uuid(),
     }).parse(req.body);
+    if (!(await isStaffUser(body.teacher_id))) {
+      res.status(400).json({ error: 'Questions can only be assigned to teachers', code: 'NOT_STAFF' }); return;
+    }
     await db('marking_assignments')
       .insert({ exam_id: req.params.id, ...body, assigned_by: req.user!.sub })
       .onConflict(['exam_id', 'teacher_id', 'question_id']).ignore();
@@ -370,7 +378,7 @@ router.post('/:id/assignments/bulk', requireAuth, requireRole(['teacher', 'admin
       add: z.array(z.string().uuid()).max(500).default([]),
       remove: z.array(z.string().uuid()).max(500).default([]),
     }).parse(req.body);
-    const teacher = await db('users').where({ id: body.teacher_id }).whereNull('disabled_at').first('id');
+    const teacher = await db('users').where({ id: body.teacher_id }).whereNull('disabled_at').whereIn('role', ['admin', 'teacher']).first('id');
     if (!teacher) { res.status(404).json({ error: 'Teacher not found', code: 'NOT_FOUND' }); return; }
     const wanted = [...new Set([...body.add, ...body.remove])];
     const valid = await db('exam_questions').where({ exam_id: req.params.id }).whereIn('id', wanted).select<{ id: string }[]>('id');

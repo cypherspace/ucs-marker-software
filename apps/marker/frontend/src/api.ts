@@ -322,8 +322,8 @@ export const api = {
       }),
     removeInvite: (email: string) =>
       http<ApiSuccess<{ ok: true }>>(`${ADM}/invites/${encodeURIComponent(email)}`, { method: 'DELETE' }),
-    setUserRole: (id: string, role: 'admin' | 'teacher') =>
-      http<ApiSuccess<{ id: string; email: string; role: 'admin' | 'teacher' }>>(`${ADM}/users/${id}`, {
+    setUserRole: (id: string, role: 'admin' | 'teacher' | 'student') =>
+      http<ApiSuccess<{ id: string; email: string; role: 'admin' | 'teacher' | 'student' }>>(`${ADM}/users/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ role }),

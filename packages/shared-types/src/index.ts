@@ -17,7 +17,7 @@ export interface AuthMe {
   id: string;
   email: string;
   name: string | null;
-  role: 'admin' | 'teacher';
+  role: 'admin' | 'teacher' | 'student';
 }
 
 // ─── Exams ───────────────────────────────────────────────────────────────────
@@ -303,7 +303,7 @@ export interface AdminUser {
   id: string;
   email: string;
   name: string | null;
-  role: 'admin' | 'teacher';
+  role: 'admin' | 'teacher' | 'student';
   created_at: string;
   last_login_at: string | null;
   disabled_at: string | null;

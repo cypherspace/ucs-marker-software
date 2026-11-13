@@ -1,7 +1,7 @@
 import { useSearchParams } from 'react-router-dom';
 
 const ERROR_MESSAGES: Record<string, string> = {
-  not_allowed: 'Your account is not authorised. Contact your system administrator.',
+  not_allowed: 'This account is not allowed in. Use your school Google account, or ask your teacher.',
   deactivated: 'This account has been deactivated. Contact your system administrator.',
   google_error: 'Google sign-in failed. Please try again.',
   oauth_failed: 'Authentication failed. Please try again.',
@@ -36,9 +36,17 @@ export function Login() {
           Sign in with Google
         </a>
 
-        <p className="mt-6 text-center text-xs text-slate-400">
-          Access restricted to authorised UCS staff.
-        </p>
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <a
+            href="/auth/google/student"
+            className="flex w-full items-center justify-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Student sign-in
+          </a>
+          <p className="mt-2 text-center text-xs text-slate-400">
+            Students: use the link your teacher gave you, or sign in here with your school account.
+          </p>
+        </div>
       </div>
     </div>
   );

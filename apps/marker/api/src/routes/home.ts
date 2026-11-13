@@ -126,7 +126,7 @@ router.get('/home', requireAuth, async (req, res, next) => {
     };
 
     if (isAdmin) {
-      const staff = await db('users').count('id as n').first<{ n: string }>();
+      const staff = await db('users').whereIn('role', ['admin', 'teacher']).count('id as n').first<{ n: string }>();
       const invites = await db('allowed_emails').count('email as n').first<{ n: string }>();
       summary.admin = { staff: num(staff?.n), pending_invites: num(invites?.n) };
     }

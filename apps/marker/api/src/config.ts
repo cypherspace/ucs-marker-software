@@ -53,6 +53,10 @@ export const config = {
   publicUrl: process.env.PUBLIC_URL ?? '',
   frontendUrl: process.env.FRONTEND_URL ?? '',
   allowSignup: process.env.ALLOW_SIGNUP === 'true',
+  // Anyone signing in for the first time with an address on one of these domains, and not on the staff list, becomes a
+  // student (practice marking only). Set STUDENT_SIGNUP=false to turn that off.
+  studentSignup: process.env.STUDENT_SIGNUP !== 'false',
+  studentEmailDomains: (process.env.STUDENT_EMAIL_DOMAINS ?? 'ucs.org.uk').split(',').map((d) => d.trim().toLowerCase()).filter(Boolean),
   cookieSecure: (process.env.COOKIE_SECURE ?? (process.env.NODE_ENV === 'production' ? 'true' : 'false')) === 'true',
   tokenEncryptionKey: tokenEncryptionKey(),
   // Test switch: answer AI calls with deterministic fake output instead of calling Gemini.

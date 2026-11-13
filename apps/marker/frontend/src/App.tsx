@@ -18,6 +18,7 @@ import { MarkingInterface } from './pages/MarkingInterface';
 import { ComparativeMarking } from './pages/ComparativeMarking';
 import { ComparativeRanking } from './pages/ComparativeRanking';
 import { AiMarking } from './pages/AiMarking';
+import { StudentHome } from './pages/practice/StudentHome';
 
 export function App() {
   const navigate = useNavigate();
@@ -66,6 +67,30 @@ export function App() {
   if (!me) return <div className="p-6 text-sm text-slate-500">Redirecting…</div>;
 
   const isTeacherOrAdmin = me.role === 'admin' || me.role === 'teacher';
+
+  // Students only ever see the practice pages (the server refuses them everything else too)
+  if (me.role === 'student') {
+    return (
+      <div className="flex h-full flex-col">
+        <header className="flex flex-wrap items-center gap-x-4 gap-y-1 bg-indigo-700 px-4 py-2 text-white">
+          <h1 className="whitespace-nowrap text-lg font-semibold"><Link to="/practice" className="hover:opacity-90">UCS Marking</Link></h1>
+          <nav className="flex flex-wrap gap-x-3 text-sm whitespace-nowrap">
+            <NavLink to="/practice" end className={navCls}>Practice marking</NavLink>
+          </nav>
+          <div className="ml-auto flex items-center gap-3 whitespace-nowrap text-sm">
+            <span className="hidden opacity-90 sm:inline">{me.email}</span>
+            <button onClick={handleSignOut} className="rounded bg-indigo-800 px-2 py-1 text-xs hover:bg-indigo-900">Sign out</button>
+          </div>
+        </header>
+        <main className="min-h-0 flex-1 overflow-auto">
+          <Routes>
+            <Route path="/practice" element={<StudentHome />} />
+            <Route path="*" element={<Navigate to="/practice" replace />} />
+          </Routes>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col">
