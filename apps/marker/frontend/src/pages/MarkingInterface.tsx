@@ -14,7 +14,7 @@ import { ZoomControls } from '../components/ZoomControls';
 import { useZoom } from '../hooks/useZoom';
 import { annotationMark, markTickTotal, nextNumber } from '../lib/annotations';
 import { usePersistedState } from '../hooks/usePersistedState';
-import { applyDigit, isMarkDigitKey, type DigitBuffer } from '../lib/markKeys';
+import { applyDigit, isMarkDigitKey, isSaveEnterKey, type DigitBuffer } from '../lib/markKeys';
 import type { Annotation, AnnotationData, QueueClip } from '@marker/shared-types';
 import { questionLabel } from '../lib/questionLabel';
 
@@ -179,6 +179,8 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   // Typing a number anywhere on the page sets the mark (unless the Text tool is selected or a field has focus).
   // Backspace / Delete clears a typed mark so the Marks box follows the annotations again.
   const digits = useRef<DigitBuffer>({ text: '', at: 0 });
+  // Enter saves the mark and moves to the next clip, the same as the Save & Next button
+  const saveNext = useRef<() => void>(() => {});
   const [flash, setFlash] = useState(false);
   useEffect(() => {
     if (showPages) return;
@@ -186,6 +188,11 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      if (isSaveEnterKey(e, tool)) {
+        e.preventDefault();
+        if (canSave && !saveMutation.isPending) saveNext.current();
+        return;
+      }
       if ((e.key === 'Backspace' || e.key === 'Delete') && !inField && tool !== 'text' && typed !== null) {
         e.preventDefault();
         digits.current = { text: '', at: 0 };
@@ -204,7 +211,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     };
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('keydown', onKey); clearTimeout(timer); };
-  }, [tool, maxMarks, auto, typed, showPages]);
+  }, [tool, maxMarks, auto, typed, showPages, canSave, saveMutation.isPending]);
 
   // Esc leaves the converted view
   useEffect(() => {
@@ -240,6 +247,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     try { await saveMutation.mutateAsync(false); } catch { return; }
     go(clip.next_unmarked_id);
   }
+  saveNext.current = () => { void saveAndNext(); };
 
   const list = listQ.data?.data ?? [];
   const statusText = saveMutation.isPending ? 'Saving…'

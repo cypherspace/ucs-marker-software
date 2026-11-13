@@ -31,3 +31,27 @@ describe('isMarkDigitKey', () => {
   });
   it('is off while the Text tool is selected', () => expect(isMarkDigitKey(key(), 'text')).toBe(false));
 });
+
+import { isSaveEnterKey } from './markKeys';
+
+const enter = (over: Record<string, unknown> = {}) =>
+  ({ key: 'Enter', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, repeat: false, target: { tagName: 'DIV' }, ...over });
+
+describe('isSaveEnterKey', () => {
+  it('saves and moves on from the page or the Marks box', () => {
+    expect(isSaveEnterKey(enter(), 'tick')).toBe(true);
+    expect(isSaveEnterKey(enter({ target: { tagName: 'INPUT', id: 'marks' } }), 'tick')).toBe(true);
+  });
+  it('leaves Enter alone with the Text tool, in other fields and on controls', () => {
+    expect(isSaveEnterKey(enter(), 'text')).toBe(false);
+    expect(isSaveEnterKey(enter({ target: { tagName: 'INPUT', id: 'other' } }), 'tick')).toBe(false);
+    expect(isSaveEnterKey(enter({ target: { tagName: 'BUTTON' } }), 'tick')).toBe(false);
+    expect(isSaveEnterKey(enter({ target: { tagName: 'SELECT' } }), 'tick')).toBe(false);
+    expect(isSaveEnterKey(enter({ target: { tagName: 'TEXTAREA' } }), 'tick')).toBe(false);
+  });
+  it('ignores held keys, repeats and other keys', () => {
+    expect(isSaveEnterKey(enter({ repeat: true }), 'tick')).toBe(false);
+    expect(isSaveEnterKey(enter({ ctrlKey: true }), 'tick')).toBe(false);
+    expect(isSaveEnterKey(enter({ key: 'a' }), 'tick')).toBe(false);
+  });
+});

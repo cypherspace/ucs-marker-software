@@ -48,7 +48,7 @@ export function AnnotationToolbar({
         <button
           key={t}
           type="button"
-          onClick={() => onTool(t)}
+          onClick={(e) => { onTool(t); e.currentTarget.blur(); }}
           aria-pressed={tool === t}
           className={`rounded px-2 py-1 text-left text-xs font-medium transition-colors ${
             tool === t
@@ -68,7 +68,7 @@ export function AnnotationToolbar({
           <button
             key={c}
             type="button"
-            onClick={() => onColor(c)}
+            onClick={(e) => { onColor(c); e.currentTarget.blur(); }}
             aria-label={`Colour ${c}`}
             style={{ background: c }}
             className={`h-6 w-6 rounded-full border-2 transition-all ${color === c ? 'scale-110 border-slate-700' : 'border-transparent'}`}
@@ -79,7 +79,7 @@ export function AnnotationToolbar({
       <div className="mt-2 border-t border-slate-200 pt-2">
         <button
           type="button"
-          onClick={onUndo}
+          onClick={(e) => { onUndo(); e.currentTarget.blur(); }}
           disabled={!canUndo}
           className="w-full rounded bg-slate-100 px-2 py-1 text-xs text-slate-600 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
         >
@@ -88,7 +88,7 @@ export function AnnotationToolbar({
       </div>
 
       <p className="mt-1 text-[11px] leading-tight text-slate-400">
-        <strong>Double-click</strong> to place or remove a tick, cross or mark. Right-click to change tool. <strong>Type a number</strong> to set the mark.
+        <strong>Double-click</strong> to place or remove a tick, cross or mark. Right-click to change tool. <strong>Type a number</strong> to set the mark, then <strong>Enter</strong> to save and go to the next script.
       </p>
     </div>
   );

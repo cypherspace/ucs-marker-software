@@ -19,3 +19,17 @@ export function isMarkDigitKey(e: { key: string; ctrlKey: boolean; metaKey: bool
   const tag = t?.tagName;
   return !(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable);
 }
+
+// Should Enter save the mark and move on? Not with the Text tool (Enter confirms a note), not on a button, link,
+// list or text area (Enter already means something there), and not in other text fields. The Marks box is fine.
+export function isSaveEnterKey(
+  e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; repeat?: boolean; target: unknown },
+  tool: string,
+): boolean {
+  if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat || tool === 'text') return false;
+  const t = e.target as { tagName?: string; id?: string; isContentEditable?: boolean } | null;
+  const tag = t?.tagName;
+  if (tag === 'BUTTON' || tag === 'A' || tag === 'SELECT' || tag === 'TEXTAREA' || t?.isContentEditable) return false;
+  if (tag === 'INPUT') return t?.id === 'marks';
+  return true;
+}
