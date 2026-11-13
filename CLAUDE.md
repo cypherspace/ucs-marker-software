@@ -98,6 +98,9 @@ Secrets created from PowerShell got a UTF-8 BOM, which broke the `TOKEN_ENCRYPTI
 
 ## Status and next steps (as of 2026-10-09)
 
+**Release in progress (2026-11-13): read `docs/release/pr-22-handoff.md` first.** PR #22 (student practice marking, per-teacher combining, student access fence) is open and not merged; migrations 011 to 013 still have to be applied to production before it is merged.
+
+
 **Where things are.** The system is live on Cloud Run and a teacher can run a whole exam through it. `main` and `dev` are at the same code (`3ed492c`, the merge of PR #17, at the time of writing) and `main` has been deployed. Check the live revisions with `gcloud run revisions list --service=marker-api --region=europe-west2 --project=ucs-marking-software` (and `--service=marker-extractor`). Migrations 001 to 010 are applied.
 
 **Confirmed working on the live site by the user (a real signed-in session, as of 2026-10-07; nothing from the 2026-10-08 clean-up has been recorded as checked live yet):** Google sign-in, exam setup, the Drive picker and Drive-stored scripts, the region editor, drawing per-script clips for typed/scribed/incomplete scripts, Generate Clips, clip images on the marking page, Prev / Next / jump between scripts, Mark ticks (1 mark each, total fills the Marks box), ticks persisting per script, the annotation tools staying in view while scrolling a long script, and **typed text (handwriting recognition)** with the new Gemini key and model.
