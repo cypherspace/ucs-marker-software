@@ -167,14 +167,14 @@ _next_slot = 0.0
 
 
 def _pace_gemini(max_wait: float = 60.0) -> None:
-    """Space Gemini calls out to GEMINI_MAX_RPM per minute (default 6; 0 = no limit) so a free-tier key is
+    """Space Gemini calls out to GEMINI_MAX_RPM per minute (default 300 for a paid key, which allows 1000; the free tier allows only 5; 0 = no limit) so a free-tier key is
     not hit faster than it allows. Calls queue in order. Raise the limit once the key is on a paid plan."""
     import time
     global _next_slot
     try:
-        rpm = float(os.environ.get("GEMINI_MAX_RPM", "6"))
+        rpm = float(os.environ.get("GEMINI_MAX_RPM", "300"))
     except ValueError:
-        rpm = 6.0
+        rpm = 300.0
     if rpm <= 0:
         return
     with _pace_lock:

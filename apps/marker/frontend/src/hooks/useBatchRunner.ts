@@ -24,13 +24,12 @@ const IDLE: BatchState = { status: 'idle', total: 0, done: 0, failed: [], fatal:
 // items at a time, because background work after a response is throttled on Cloud Run).
 // Pausing finishes the batch in flight, and resume carries on from where it stopped.
 // Items that fail for a temporary reason (rate limit, Gemini busy) go back in the queue and are
-// tried again after a wait; after a rate limit the run slows to one item at a time.
+// tried again after a wait.
 export function useBatchRunner(batchSize = 3) {
   const [state, setState] = useState<BatchState>(IDLE);
   const pauseRef = useRef(false);
   const remainingRef = useRef<string[]>([]);
   const attemptsRef = useRef<Record<string, number>>({});
-  const slowRef = useRef(false);
   const requestFailuresRef = useRef(0);
   const stepRef = useRef<((ids: string[]) => Promise<BatchItemResult[]>) | null>(null);
 
@@ -53,12 +52,11 @@ export function useBatchRunner(batchSize = 3) {
     setState((s) => ({ ...s, status: 'running' }));
     while (remainingRef.current.length > 0) {
       if (pauseRef.current) { setState((s) => ({ ...s, status: 'paused' })); return; }
-      const batch = remainingRef.current.slice(0, slowRef.current ? 1 : batchSize);
+      const batch = remainingRef.current.slice(0, batchSize);
       try {
         const results = await step(batch);
         requestFailuresRef.current = 0;
         const outcome = decideStep(results, attemptsRef.current);
-        if (outcome.rateLimited) slowRef.current = true;
         remainingRef.current = [...outcome.retry, ...remainingRef.current.slice(batch.length)];
         setState((s) => ({
           ...s,
@@ -102,7 +100,6 @@ export function useBatchRunner(batchSize = 3) {
     stepRef.current = step;
     remainingRef.current = [...ids];
     attemptsRef.current = {};
-    slowRef.current = false;
     requestFailuresRef.current = 0;
     setState({ ...IDLE, status: 'running', total: ids.length });
     void loop();

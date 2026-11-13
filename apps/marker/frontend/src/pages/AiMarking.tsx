@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Button, Card, ProgressBar } from '../components/ui';
 import { useBatchRunner } from '../hooks/useBatchRunner';
-import { estimateRun } from '../lib/duration';
+import { describeRun } from '../lib/duration';
 import { AiRunNotice } from '../components/AiRunNotice';
 import type { AiMode, AiPlan, AiScopeType, AiStrictness } from '@marker/shared-types';
 import { questionLabel } from '../lib/questionLabel';
@@ -42,7 +42,8 @@ export function AiMarking() {
   const [plan, setPlan] = useState<AiPlan | null>(null);
   const [onlyDisagreements, setOnlyDisagreements] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
-  const runner = useBatchRunner(3);
+  const batchSize = aiQ.data?.data.batch_size ?? 5; // answers per Gemini request
+  const runner = useBatchRunner(aiQ.data?.data.step_size ?? batchSize); // answers per step (several requests at once)
 
   const questions = questionsQ.data?.data ?? [];
   useEffect(() => {
@@ -80,6 +81,7 @@ export function AiMarking() {
 
   if (examQ.isLoading || questionsQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
+  const run = describeRun(plan?.total ?? 0, batchSize, aiQ.data?.data.max_rpm ?? 0, aiQ.data?.data.max_rpd ?? 0);
   const configured = aiQ.data?.data.configured ?? true;
   const hasMs = Boolean(question?.ms_clip_image_url);
   const needsGuidance = !hasMs && !guidance.trim();
@@ -203,10 +205,19 @@ export function AiMarking() {
           <div role="alert" className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
             <p>
               <strong>{plan.total}</strong> clip{plan.total === 1 ? '' : 's'} will be sent to Gemini
-              {useExamples ? ', each with a few reference examples' : ''}. This uses your Gemini quota.
-              {estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0) && ` To stay within Gemini's limits this will take ${estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0)}; you can leave this page open and pause at any time.`}
+              {useExamples ? ', along with a few teacher-marked reference examples' : ''}. This uses your Gemini quota.
+              {' '}{batchSize === 1
+                ? <>Each is marked on its own, in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'}</>
+                : <>They go in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'} of up to {batchSize}</>}
+              {run.duration && <>, which will take {run.duration}; you can leave this page open and pause at any time</>}.
               {plan.total === 0 && ' There is nothing to do for these settings.'}
             </p>
+            {run.overDailyLimit && (
+              <p className="font-medium text-red-800">
+                That is more than the {aiQ.data?.data.max_rpd} requests a day this Gemini key allows. The run will stop when the daily
+                limit is reached and can be resumed tomorrow, or choose a smaller sample now.
+              </p>
+            )}
             <div className="flex gap-2">
               <Button variant="primary" disabled={plan.total === 0} onClick={start}>Start marking</Button>
               <Button variant="secondary" onClick={() => setPlan(null)}>Cancel</Button>

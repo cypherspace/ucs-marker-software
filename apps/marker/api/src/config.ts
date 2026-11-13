@@ -35,9 +35,19 @@ export const config = {
   storageBucket: process.env.STORAGE_BUCKET,
   googleApiKey: process.env.GOOGLE_API_KEY ?? '',
   geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
+  // Only for testing against a fake Gemini server
+  geminiBaseUrl: process.env.GEMINI_BASE_URL || undefined,
   // Gemini requests per minute this server will make (the free tier allows only a few). Calls beyond it are
   // queued, not failed. Raise it, or set 0 for no limit, once the key is on a paid plan.
-  geminiMaxRpm: Number(process.env.GEMINI_MAX_RPM ?? 6),
+  geminiMaxRpm: Number(process.env.GEMINI_MAX_RPM ?? 300),
+  // Clips (or pairs) sent to Gemini in ONE request. 1 means every answer is marked on its own, which is what we
+  // want now billing is on (1000 requests/minute, 10000/day). On the free tier (5/minute, 20/day) it was 8, to
+  // save requests; set GEMINI_BATCH_SIZE=8 (and GEMINI_PARALLEL=1, GEMINI_MAX_RPM=4) to go back.
+  geminiBatchSize: Math.min(12, Math.max(1, Math.round(Number(process.env.GEMINI_BATCH_SIZE ?? 1)) || 1)),
+  // Requests sent to Gemini at the same time within one browser step (a step carries batch size x this many answers).
+  geminiParallel: Math.min(6, Math.max(1, Math.round(Number(process.env.GEMINI_PARALLEL ?? 6)) || 6)),
+  // What the key allows per day, for the run estimate only (nothing here enforces it). 0 = unknown.
+  geminiMaxRpd: Number(process.env.GEMINI_MAX_RPD ?? 10000),
   googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? '',
   googleOAuthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
   publicUrl: process.env.PUBLIC_URL ?? '',
