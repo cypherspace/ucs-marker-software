@@ -24,6 +24,8 @@ export interface AuthMe {
 
 export type ExamStatus = 'setup' | 'clipping' | 'marking' | 'complete';
 
+export type MarkCombine = 'latest' | 'average' | 'lead';
+
 export interface Exam {
   id: string;
   name: string;
@@ -34,6 +36,8 @@ export interface Exam {
   exam_series: string | null;
   lead_teacher_id: string;
   status: ExamStatus;
+  // How several teachers' marks for one clip become the one that counts in results (see services/markCombine.ts)
+  mark_combine?: MarkCombine;
   mark_scheme_pdf_url: string | null;
   use_drive_storage: boolean;
   drive_folder_id: string | null;
@@ -242,6 +246,8 @@ export interface QuestionProgress {
   // Clips whose pages/areas were chosen by hand, and those changed after someone marked them
   manual_clips: number;
   changed_after_marking_clips: number;
+  // Clips where two or more teachers gave different marks
+  conflict_clips: number;
   marking_mode: MarkingMode;
   teachers: { teacher_id: string; email: string; marked: number; total: number }[];
 }
@@ -480,4 +486,39 @@ export interface ExamResults {
   questions: ResultsQuestion[];
   rows: ResultsRow[];
   stats: ResultsQuestionStats[];
+}
+// ─── Teachers' marks side by side ────────────────────────────────────────────
+
+export type AgreementState = 'none' | 'single' | 'agreed' | 'conflict';
+
+export interface AgreementClip {
+  clip_id: string;
+  // The script's number (never a student's name)
+  script: string;
+  marks: { teacher_id: string | null; email: string; marks: number; marked_at: string | null }[];
+  mean: number | null;
+  min: number | null;
+  max: number | null;
+  spread: number;
+  state: AgreementState;
+  moderated: number | null;
+  // The mark that counts for this clip under the exam's combine setting
+  combined: number | null;
+}
+
+export interface QuestionAgreement {
+  question_id: string;
+  question_number: string;
+  max_marks: number;
+  combine: MarkCombine;
+  teachers: { teacher_id: string; email: string; name: string | null; marked: number }[];
+  clips: AgreementClip[];
+  stats: {
+    clips_marked: number;
+    multi_marked: number;
+    agreed: number;
+    conflicts: number;
+    agreed_pct: number | null;
+    mean_spread: number | null;
+  };
 }

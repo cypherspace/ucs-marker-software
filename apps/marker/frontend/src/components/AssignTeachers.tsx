@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { ExamQuestion, MarkingAssignment, TeacherOption } from '@marker/shared-types';
+import type { ExamQuestion, MarkCombine, MarkingAssignment, TeacherOption } from '@marker/shared-types';
+import { COMBINES, COMBINE_HELP, COMBINE_LABELS } from '../lib/markCombine';
 import { api } from '../api';
 import { parseQuestionLabel, questionLabel, sortByQuestionLabel } from '../lib/questionLabel';
 import { Button } from './ui';
@@ -10,13 +11,15 @@ interface Props {
   teachers: TeacherOption[];
   questions: ExamQuestion[];
   assignments: MarkingAssignment[];
+  // How several teachers' marks for one script are combined (saved on the exam)
+  markCombine: MarkCombine;
 }
 
 const who = (t: TeacherOption) => t.name ? `${t.name} (${t.email})` : t.email;
 
 // Pick a teacher, tick the questions they should mark, save once. The ticks start from what they already have,
 // so unticking a question takes it off them.
-export function AssignTeachers({ examId, teachers, questions, assignments }: Props) {
+export function AssignTeachers({ examId, teachers, questions, assignments, markCombine }: Props) {
   const qc = useQueryClient();
   const [teacherId, setTeacherId] = useState('');
   const [ticked, setTicked] = useState<Set<string>>(new Set());
@@ -66,95 +69,126 @@ export function AssignTeachers({ examId, teachers, questions, assignments }: Pro
     onError: (e) => setMessage((e as Error).message),
   });
 
+  const combine = useMutation({
+    mutationFn: (value: MarkCombine) => api.updateExam(examId, { mark_combine: value }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['exam', examId] });
+      qc.invalidateQueries({ queryKey: ['results', examId] });
+    },
+  });
+
   const allIds = ordered.map((q) => q.id);
   const teacher = teachers.find((t) => t.id === teacherId);
 
   return (
+    <div className="space-y-4">
     <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
-      <section aria-label="Teachers" className="rounded-lg border border-slate-200 bg-white">
-        <h2 className="border-b border-slate-100 px-4 py-3 font-medium text-slate-700">1. Choose a teacher</h2>
-        {teachers.length === 0 ? (
-          <p className="p-4 text-sm text-slate-500">No teachers yet. Invite staff from the Admin page.</p>
-        ) : (
-          <ul className="max-h-[28rem] divide-y divide-slate-100 overflow-auto">
-            {teachers.map((t) => (
-              <li key={t.id}>
-                <button
-                  onClick={() => { setTeacherId(t.id); setMessage(null); }}
-                  aria-pressed={t.id === teacherId}
-                  className={`flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm ${t.id === teacherId ? 'bg-indigo-50 font-medium text-indigo-800' : 'text-slate-700 hover:bg-slate-50'}`}
-                >
-                  <span className="min-w-0 truncate">{who(t)}</span>
-                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{countFor(t.id)}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section aria-label="Questions" className="rounded-lg border border-slate-200 bg-white">
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
-          <h2 className="font-medium text-slate-700">2. Tick their questions</h2>
-          {teacher && <span className="text-sm text-slate-500">for {teacher.name ?? teacher.email}</span>}
-          <div className="ml-auto flex gap-2 text-xs">
-            <button disabled={!teacherId} onClick={() => toggle(allIds, true)} className="text-indigo-600 hover:underline disabled:opacity-40">Select all</button>
-            <button disabled={!teacherId} onClick={() => toggle(allIds, false)} className="text-indigo-600 hover:underline disabled:opacity-40">Clear</button>
-          </div>
-        </div>
-
-        {!teacherId ? (
-          <p className="p-4 text-sm text-slate-500">Choose a teacher on the left.</p>
-        ) : ordered.length === 0 ? (
-          <p className="p-4 text-sm text-slate-500">This exam has no questions yet. Add them on the Questions tab.</p>
-        ) : (
-          <div className="space-y-3 p-4">
-            {groups.map(([number, qs]) => {
-              const ids = qs.map((q) => q.id);
-              const all = ids.every((id) => ticked.has(id));
-              const some = ids.some((id) => ticked.has(id));
-              return (
-                <fieldset key={number} className="rounded-md border border-slate-100 p-3">
-                  <legend className="px-1">
-                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={all}
-                        ref={(el) => { if (el) el.indeterminate = some && !all; }}
-                        onChange={(e) => toggle(ids, e.target.checked)}
-                        aria-label={`All of question ${number}`}
-                      />
-                      Question {number}
-                    </label>
-                  </legend>
-                  <div className="flex flex-wrap gap-2">
-                    {qs.map((q) => (
-                      <label
-                        key={q.id}
-                        className={`flex cursor-pointer items-center gap-2 rounded border px-2.5 py-1.5 text-sm ${ticked.has(q.id) ? 'border-indigo-300 bg-indigo-50 text-indigo-800' : 'border-slate-200 text-slate-700 hover:bg-slate-50'}`}
-                      >
-                        <input type="checkbox" checked={ticked.has(q.id)} onChange={(e) => toggle([q.id], e.target.checked)} />
-                        Q{questionLabel(q.question_number)}
-                        <span className="text-xs text-slate-500">{q.max_marks}m</span>
-                        {current.has(q.id) && <span className="text-xs text-green-700" title="Already assigned">✓</span>}
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
-              );
-            })}
-
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <Button variant="primary" onClick={() => save.mutate()} disabled={!changed || save.isPending}>
-                {save.isPending ? 'Saving…' : changed
-                  ? `Save (${[toAdd.length && `${toAdd.length} to add`, toRemove.length && `${toRemove.length} to remove`].filter(Boolean).join(', ')})`
-                  : 'Saved'}
-              </Button>
-              {changed && !save.isPending && <button onClick={() => setTicked(new Set(current))} className="text-sm text-slate-500 hover:underline">Undo changes</button>}
-              {message && <span role="status" className="text-sm text-slate-600">{message}</span>}
+        <section aria-label="Teachers" className="rounded-lg border border-slate-200 bg-white">
+          <h2 className="border-b border-slate-100 px-4 py-3 font-medium text-slate-700">1. Choose a teacher</h2>
+          {teachers.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500">No teachers yet. Invite staff from the Admin page.</p>
+          ) : (
+            <ul className="max-h-[28rem] divide-y divide-slate-100 overflow-auto">
+              {teachers.map((t) => (
+                <li key={t.id}>
+                  <button
+                    onClick={() => { setTeacherId(t.id); setMessage(null); }}
+                    aria-pressed={t.id === teacherId}
+                    className={`flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm ${t.id === teacherId ? 'bg-indigo-50 font-medium text-indigo-800' : 'text-slate-700 hover:bg-slate-50'}`}
+                  >
+                    <span className="min-w-0 truncate">{who(t)}</span>
+                    <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{countFor(t.id)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+  
+        <section aria-label="Questions" className="rounded-lg border border-slate-200 bg-white">
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
+            <h2 className="font-medium text-slate-700">2. Tick their questions</h2>
+            {teacher && <span className="text-sm text-slate-500">for {teacher.name ?? teacher.email}</span>}
+            <div className="ml-auto flex gap-2 text-xs">
+              <button disabled={!teacherId} onClick={() => toggle(allIds, true)} className="text-indigo-600 hover:underline disabled:opacity-40">Select all</button>
+              <button disabled={!teacherId} onClick={() => toggle(allIds, false)} className="text-indigo-600 hover:underline disabled:opacity-40">Clear</button>
             </div>
           </div>
-        )}
+  
+          {!teacherId ? (
+            <p className="p-4 text-sm text-slate-500">Choose a teacher on the left.</p>
+          ) : ordered.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500">This exam has no questions yet. Add them on the Questions tab.</p>
+          ) : (
+            <div className="space-y-3 p-4">
+              {groups.map(([number, qs]) => {
+                const ids = qs.map((q) => q.id);
+                const all = ids.every((id) => ticked.has(id));
+                const some = ids.some((id) => ticked.has(id));
+                return (
+                  <fieldset key={number} className="rounded-md border border-slate-100 p-3">
+                    <legend className="px-1">
+                      <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={all}
+                          ref={(el) => { if (el) el.indeterminate = some && !all; }}
+                          onChange={(e) => toggle(ids, e.target.checked)}
+                          aria-label={`All of question ${number}`}
+                        />
+                        Question {number}
+                      </label>
+                    </legend>
+                    <div className="flex flex-wrap gap-2">
+                      {qs.map((q) => (
+                        <label
+                          key={q.id}
+                          className={`flex cursor-pointer items-center gap-2 rounded border px-2.5 py-1.5 text-sm ${ticked.has(q.id) ? 'border-indigo-300 bg-indigo-50 text-indigo-800' : 'border-slate-200 text-slate-700 hover:bg-slate-50'}`}
+                        >
+                          <input type="checkbox" checked={ticked.has(q.id)} onChange={(e) => toggle([q.id], e.target.checked)} />
+                          Q{questionLabel(q.question_number)}
+                          <span className="text-xs text-slate-500">{q.max_marks}m</span>
+                          {current.has(q.id) && <span className="text-xs text-green-700" title="Already assigned">✓</span>}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                );
+              })}
+  
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <Button variant="primary" onClick={() => save.mutate()} disabled={!changed || save.isPending}>
+                  {save.isPending ? 'Saving…' : changed
+                    ? `Save (${[toAdd.length && `${toAdd.length} to add`, toRemove.length && `${toRemove.length} to remove`].filter(Boolean).join(', ')})`
+                    : 'Saved'}
+                </Button>
+                {changed && !save.isPending && <button onClick={() => setTicked(new Set(current))} className="text-sm text-slate-500 hover:underline">Undo changes</button>}
+                {message && <span role="status" className="text-sm text-slate-600">{message}</span>}
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
+
+      <section aria-label="Combining marks" className="rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="font-medium text-slate-700">When several teachers mark the same answer</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Every teacher's mark is kept on its own. This chooses which mark counts in the results and exports; you can also
+          compare them on the Progress tab, and choose differently when you view results.
+        </p>
+        <label className="mt-3 grid max-w-md gap-1 text-sm font-medium text-slate-700">
+          Marks that count
+          <select
+            value={markCombine}
+            disabled={combine.isPending}
+            onChange={(e) => combine.mutate(e.target.value as MarkCombine)}
+            className="rounded border border-slate-300 px-2 py-2 text-sm font-normal"
+          >
+            {COMBINES.map((c) => <option key={c} value={c}>{COMBINE_LABELS[c]}</option>)}
+          </select>
+        </label>
+        <p className="mt-2 text-xs text-slate-500">{COMBINE_HELP[markCombine]}</p>
+        {combine.error && <p role="alert" className="mt-2 text-xs text-red-600">{(combine.error as Error).message}</p>}
       </section>
     </div>
   );

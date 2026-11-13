@@ -4,6 +4,7 @@ import type {
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
   ComparativeStatus, ComparativeNextPair, Ranking, ClipSettings, ClipRegion, NameZone, ClipListItem,
+  MarkCombine, QuestionAgreement,
 } from '@marker/shared-types';
 
 export class HttpError extends Error {
@@ -266,22 +267,29 @@ export const api = {
       }),
 
   // Export
-  exportResults: (examId: string, opts: { names?: boolean; classGroup?: string | null } = {}) => {
+  exportResults: (examId: string, opts: { names?: boolean; classGroup?: string | null; combine?: MarkCombine; perTeacher?: boolean } = {}) => {
     // classGroup: a class name, null for scripts with no class, undefined for everything
     const q = new URLSearchParams();
     if (opts.names) q.set('names', '1');
+    if (opts.combine) q.set('combine', opts.combine);
+    if (opts.perTeacher) q.set('per_teacher', '1');
     if (opts.classGroup === null) q.set('no_class', '1');
     else if (opts.classGroup) q.set('class', opts.classGroup);
     const qs = q.toString();
     return http<ApiSuccess<{ driveUrl?: string; csv?: string; filename?: string }>>(`${A}/exams/${examId}/export${qs ? `?${qs}` : ''}`);
   },
-  getResults: (examId: string, classGroup?: string | null) => {
+  getResults: (examId: string, classGroup?: string | null, combine?: MarkCombine) => {
     const q = new URLSearchParams();
+    if (combine) q.set('combine', combine);
     if (classGroup === null) q.set('no_class', '1');
     else if (classGroup) q.set('class', classGroup);
     const qs = q.toString();
     return http<ApiSuccess<ExamResults>>(`${A}/exams/${examId}/results${qs ? `?${qs}` : ''}`);
   },
+
+  // Teachers' marks side by side (lead teacher / admin)
+  getAgreement: (examId: string, questionId: string) =>
+    http<ApiSuccess<QuestionAgreement>>(`${A}/exams/${examId}/questions/${questionId}/agreement`),
 
   // AI
   aiStatus: () => http<ApiSuccess<{ configured: boolean; model: string; max_rpm: number; batch_size: number; step_size: number; max_rpd: number }>>(`${A}/ai/status`),

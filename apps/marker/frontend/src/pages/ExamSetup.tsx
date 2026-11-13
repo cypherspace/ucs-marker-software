@@ -519,7 +519,7 @@ export function ExamSetup() {
 
       {/* Assign teachers tab */}
       {tab === 'assign' && (
-        <AssignTeachers examId={id!} teachers={teachers} questions={questions} assignments={assignments} />
+        <AssignTeachers examId={id!} teachers={teachers} questions={questions} assignments={assignments} markCombine={exam?.mark_combine ?? 'latest'} />
       )}
 
       {clipper && (

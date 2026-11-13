@@ -3,7 +3,8 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useOutletContext, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card } from '../components/ui';
-import type { Exam } from '@marker/shared-types';
+import type { Exam, MarkCombine } from '@marker/shared-types';
+import { COMBINES, COMBINE_LABELS } from '../lib/markCombine';
 import { questionLabel } from '../lib/questionLabel';
 
 // undefined = every class; null = scripts with no class; a string = that class
@@ -25,15 +26,18 @@ function download(csv: string, filename: string) {
 /** The marks for an exam: how each question went, and every script's marks, for the classes you may see. */
 export function ExamResults() {
   const { id } = useParams<{ id: string }>();
-  const { isLead } = useOutletContext<{ exam: Exam; isLead: boolean }>();
+  const { exam, isLead } = useOutletContext<{ exam: Exam; isLead: boolean }>();
+  // undefined = the exam's own setting; anything else is just a different way of looking at the same marks
+  const [combine, setCombine] = useState<MarkCombine | undefined>(undefined);
   const [cls, setCls] = useState<ClassChoice>(undefined);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const resultsQ = useQuery({ queryKey: ['results', id, toValue(cls)], queryFn: () => api.getResults(id!, cls), placeholderData: (prev) => prev });
+  const resultsQ = useQuery({ queryKey: ['results', id, toValue(cls), combine ?? 'exam'], queryFn: () => api.getResults(id!, cls, combine), placeholderData: (prev) => prev });
 
   const exportMut = useMutation({
-    mutationFn: (names: boolean) => api.exportResults(id!, { names, classGroup: cls }),
-    onSuccess: (res, names) => {
+    mutationFn: ({ names, perTeacher }: { names: boolean; perTeacher?: boolean }) =>
+      api.exportResults(id!, { names, classGroup: cls, combine, perTeacher }),
+    onSuccess: (res, { names }) => {
       if (res.data.driveUrl) {
         setMsg('Exported to Google Drive.');
         window.open(res.data.driveUrl, '_blank', 'noopener');
@@ -60,6 +64,20 @@ export function ExamResults() {
             : 'The scripts you uploaded, and the questions you were asked to mark.'}
         </p>
         <div className="ml-auto flex flex-wrap items-end gap-2">
+          {isLead && (
+            <label className="text-sm text-slate-600">
+              Marks that count
+              <select
+                value={combine ?? ''}
+                onChange={(e) => setCombine((e.target.value || undefined) as MarkCombine | undefined)}
+                className="ml-2 min-h-11 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm sm:min-h-9"
+                title="How several teachers' marks for one script are combined. Changing it here only changes this view and the export; the exam's own setting is on the Setup tab."
+              >
+                <option value="">Exam setting ({COMBINE_LABELS[exam.mark_combine ?? 'latest']})</option>
+                {COMBINES.map((c) => <option key={c} value={c}>{COMBINE_LABELS[c]}</option>)}
+              </select>
+            </label>
+          )}
           {showClassColumn && (
             <label className="text-sm text-slate-600">
               Class
@@ -75,16 +93,25 @@ export function ExamResults() {
               </select>
             </label>
           )}
-          <Button variant="primary" disabled={exportMut.isPending || r.rows.length === 0} onClick={() => { setMsg(null); exportMut.mutate(false); }}>
+          <Button variant="primary" disabled={exportMut.isPending || r.rows.length === 0} onClick={() => { setMsg(null); exportMut.mutate({ names: false }); }}>
             {exportMut.isPending ? 'Exporting…' : cls === undefined ? 'Export results' : 'Export this class'}
           </Button>
           {isLead && (
             <Button
               disabled={exportMut.isPending || r.rows.length === 0}
-              onClick={() => { setMsg(null); exportMut.mutate(true); }}
+              onClick={() => { setMsg(null); exportMut.mutate({ names: true }); }}
               title="Adds student names via a database join. Names never leave the platform otherwise."
             >
               Export with names
+            </Button>
+          )}
+          {isLead && (
+            <Button
+              disabled={exportMut.isPending || r.rows.length === 0}
+              onClick={() => { setMsg(null); exportMut.mutate({ names: false, perTeacher: true }); }}
+              title="Adds a column with each teacher's own mark, their mean, and whether they differ."
+            >
+              Export every teacher's marks
             </Button>
           )}
         </div>

@@ -9,6 +9,7 @@ import { ExamList } from './pages/ExamList';
 import { CreateExam } from './pages/CreateExam';
 import { ExamSetup } from './pages/ExamSetup';
 import { ExamProgress } from './pages/ExamProgress';
+import { MarkingAgreement } from './pages/MarkingAgreement';
 import { ExamPage } from './pages/ExamPage';
 import { ExamResults } from './pages/ExamResults';
 import { ExamUpload } from './pages/ExamUpload';
@@ -95,6 +96,7 @@ export function App() {
           <Route path="/marking/ai/:id" element={<AiMarking />} />
           <Route path="/exams" element={<ExamList />} />
           <Route path="/exams/new" element={<CreateExam />} />
+          <Route path="/exams/:id/agreement/:questionId" element={<MarkingAgreement />} />
           <Route path="/exams/:id" element={<ExamPage />}>
             <Route index element={<ExamProgress />} />
             <Route path="results" element={<ExamResults />} />
