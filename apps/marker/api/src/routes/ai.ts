@@ -8,6 +8,7 @@ import { describeExtractorFailure, extractorFetch } from '../services/extractor.
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireClipAccess, requireQuestionAccess, type ClipContext } from '../services/access.js';
 import { aiMarkClips, modelName } from '../services/ai.js';
+import { chunk } from '../services/aiBatch.js';
 import { classifyGemini, failureBody, httpStatusFor, notConfigured, type GeminiErrorInput } from '../services/aiErrors.js';
 import { convertedUrl, renderConvertedPage, saveConvertedImage, stripTextLayer } from '../services/converted.js';
 import type { AiPlan, AiResultRow, AiResults, AiStepResult } from '@marker/shared-types';
@@ -23,6 +24,7 @@ router.get('/ai/status', requireAuth, (_req, res) => {
       max_rpm: config.aiStub ? 0 : config.geminiMaxRpm,
       batch_size: config.geminiBatchSize, // answers sent to Gemini per request
       max_rpd: config.aiStub ? 0 : config.geminiMaxRpd, // requests the key allows per day (0 = unknown)
+      step_size: config.geminiBatchSize * config.geminiParallel, // answers the browser sends per step
     },
   });
 });
@@ -166,7 +168,7 @@ router.post('/exams/:id/ai-mark/step', requireAuth, async (req, res, next) => {
   try {
     const body = z.object({
       question_id: z.string().uuid(),
-      clip_ids: z.array(z.string().uuid()).min(1).max(12),
+      clip_ids: z.array(z.string().uuid()).min(1).max(36),
       mode: ModeSchema,
       strictness: z.enum(['strict', 'balanced', 'lenient']).default('balanced'),
       guidance: z.string().max(4000).optional(),
@@ -189,9 +191,12 @@ router.post('/exams/:id/ai-mark/step', requireAuth, async (req, res, next) => {
     const contexts: ClipContext[] = clips.map((row) => ({
       ...question, clip_id: row.id, script_id: row.script_id, clip_image_url: row.clip_image_url, ocr_text: row.ocr_text,
     }));
-    const outcomes = await aiMarkClips(contexts, {
-      mode: body.mode, strictness: body.strictness, guidance: body.guidance, useExamples: body.use_examples,
-    });
+    // (a step bigger than one batch is split, and the batches go to Gemini at the same time)
+    const markOpts = { mode: body.mode, strictness: body.strictness, guidance: body.guidance, useExamples: body.use_examples };
+    const outcomes = new Map(
+      (await Promise.all(chunk(contexts, config.geminiBatchSize).map((group) => aiMarkClips(group, markOpts))))
+        .flatMap((m) => [...m]),
+    );
     const results: AiStepResult[] = body.clip_ids.map((clipId): AiStepResult => {
       if (!byId.has(clipId)) return { clip_id: clipId, ok: false, error: 'Clip not found for this question' };
       const out = outcomes.get(clipId);

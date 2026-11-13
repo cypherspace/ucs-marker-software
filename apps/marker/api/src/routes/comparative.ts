@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireQuestionAccess } from '../services/access.js';
 import { aiJudgePairs } from '../services/ai.js';
+import { chunk } from '../services/aiBatch.js';
 import { neighbourPairs, orient, pairKey, randomPairs } from '../services/ranking.js';
 import { computeRanking } from '../services/rankingData.js';
 import type { ComparativeNextPair, ComparativeStatus } from '@marker/shared-types';
@@ -192,7 +193,7 @@ router.post(`${base}/ai-judge/plan`, requireAuth, async (req, res, next) => {
 router.post(`${base}/ai-judge/step`, requireAuth, async (req, res, next) => {
   try {
     const body = z.object({
-      pair_ids: z.array(z.string().uuid()).min(1).max(12),
+      pair_ids: z.array(z.string().uuid()).min(1).max(36),
       guidance: z.string().max(4000).optional(),
       use_examples: z.boolean().default(true),
     }).parse(req.body);
@@ -205,7 +206,11 @@ router.post(`${base}/ai-judge/step`, requireAuth, async (req, res, next) => {
       .select<{ id: string; clip_a_id: string; clip_b_id: string }[]>('id', 'clip_a_id', 'clip_b_id');
     const byId = new Map(pairs.map((p) => [p.id, p]));
     // One Gemini request judges the whole batch (the mark scheme and reference comparisons are sent once)
-    const outcomes = await aiJudgePairs(pairs, q, { guidance: body.guidance, useExamples: body.use_examples });
+    const judgeOpts = { guidance: body.guidance, useExamples: body.use_examples };
+    const outcomes = new Map(
+      (await Promise.all(chunk(pairs, config.geminiBatchSize).map((group) => aiJudgePairs(group, q, judgeOpts))))
+        .flatMap((m) => [...m]),
+    );
     const results = body.pair_ids.map((id) => {
       if (!byId.has(id)) return { pair_id: id, ok: false, error: 'Pair not found for this question' };
       const out = outcomes.get(id);

@@ -42,8 +42,8 @@ export function AiMarking() {
   const [plan, setPlan] = useState<AiPlan | null>(null);
   const [onlyDisagreements, setOnlyDisagreements] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
-  const batchSize = aiQ.data?.data.batch_size ?? 8;
-  const runner = useBatchRunner(batchSize);
+  const batchSize = aiQ.data?.data.batch_size ?? 5; // answers per Gemini request
+  const runner = useBatchRunner(aiQ.data?.data.step_size ?? batchSize); // answers per step (several requests at once)
 
   const questions = questionsQ.data?.data ?? [];
   useEffect(() => {

@@ -21,6 +21,8 @@ export type ClipperMode = 'add' | 'edit' | 'mark-scheme';
 export interface ClipperResult {
   added?: number;
   changedQuestion?: ExamQuestion;
+  // A name zone was saved on every question of the exam (the questions that now carry it)
+  nameZoneApplied?: ExamQuestion[];
   msClipped?: number;
   msError?: string;
 }
@@ -82,6 +84,7 @@ export function QuestionClipper(props: Props) {
       ? fromQuestionRegions({ name_zones: questions[questions.length - 1]?.name_zones ?? null })
       : [],
   );
+  const zonesAtOpen = useRef(JSON.stringify(strip(nameZones.current)));
 
   // ── Drawing state ─────────────────────────────────────────────────────────
   const firstRegions = (): DrawnRegion[] => {
@@ -104,6 +107,9 @@ export function QuestionClipper(props: Props) {
   const dirty = JSON.stringify(strip(regions)) !== JSON.stringify(baseline.current);
   // In add mode a question is "in progress" once something has been drawn or a mark typed
   const hasWork = mode === 'add' ? drawn.length > 0 || marks !== '' : dirty;
+  // Add mode, nothing else going on, but the name zone was drawn or moved: Save puts it on the existing questions
+  const zoneNow = JSON.stringify(strip(regions.filter((r) => r.type === 'name_zone')));
+  const zoneOnly = mode === 'add' && added.length === 0 && !hasWork && zoneNow !== zonesAtOpen.current;
 
   function showRegions(next: DrawnRegion[]) {
     setRegions(next);
@@ -128,7 +134,10 @@ export function QuestionClipper(props: Props) {
   // Create the question being typed. Returns false (with the reason shown) if it could not be added.
   async function addCurrent(): Promise<boolean> {
     const problem = problemWithNewQuestion();
-    if (problem) { setError(problem); return false; }
+    if (problem) {
+      setError(zoneOnly ? 'To save just the name zone, press Save. To add a question, draw it and enter its marks.' : problem);
+      return false;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -155,7 +164,32 @@ export function QuestionClipper(props: Props) {
     return true;
   }
 
+  // Name zones belong to questions, so a zone drawn on its own is saved onto every existing question
+  async function applyZoneToAll() {
+    if (questions.length === 0) {
+      setError('There are no questions yet to put the name zone on. Draw the first question as well: the name zone is saved with it and carried to each new question.');
+      return;
+    }
+    if (!window.confirm(`Use this name zone on all ${questions.length} question${questions.length === 1 ? '' : 's'} of this exam?\n\n`
+      + (regions.some((r) => r.type === 'name_zone') ? '' : 'You have cleared it, so the name zone will be removed from every question.\n\n')
+      + 'Clips you have already generated will need re-clipping to hide the name.')) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const zones = toNameZones(regions);
+      for (const q of questions) await api.updateQuestion(examId, q.id, { name_zones: zones });
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    onChanged();
+    onFinish({ nameZoneApplied: questions });
+  }
+
   async function saveAdd() {
+    if (zoneOnly) { await applyZoneToAll(); return; }
     if (hasWork && !(await addCurrent())) return;
     onFinish({ added: addedCount.current });
   }
@@ -399,7 +433,9 @@ export function QuestionClipper(props: Props) {
         {/* Footer */}
         <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 px-4 py-2.5">
           <span className="min-w-0 flex-1 text-xs text-slate-500">
-            {mode === 'add' && 'Draw the question on the page (use several pages if it runs over), then Add question to start the next one. Save when you have finished.'}
+            {mode === 'add' && (activeType === 'name_zone'
+              ? 'Draw the name zone around where students write their name. It is saved with each new question. To put it on the questions you already have, press Save.'
+              : 'Draw the question on the page (use several pages if it runs over), then Add question to start the next one. Save when you have finished.')}
             {mode === 'edit' && 'Drag on the page to draw a region. Move between pages to add regions on several pages; they are stitched into one image at clip time.'}
             {onMarkScheme && 'Draw the part of the mark scheme that answers this question. Save & next question moves on; Save & finish clips the mark scheme.'}
           </span>
@@ -411,7 +447,7 @@ export function QuestionClipper(props: Props) {
               <Button onClick={() => void addCurrent()} disabled={busy} title="Save this question and start the next one">
                 {busy ? 'Adding…' : 'Add question'}
               </Button>
-              <Button variant="primary" onClick={() => void saveAdd()} disabled={busy || (!hasWork && added.length === 0)}>
+              <Button variant="primary" onClick={() => void saveAdd()} disabled={busy || (!hasWork && added.length === 0 && !zoneOnly)}>
                 {busy ? 'Saving…' : 'Save'}
               </Button>
             </div>

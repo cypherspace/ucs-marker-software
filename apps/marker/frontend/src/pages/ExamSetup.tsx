@@ -147,7 +147,7 @@ export function ExamSetup() {
   // ── The clipping window (add questions / edit regions / mark scheme) ──────
   const [clipper, setClipper] = useState<{ mode: ClipperMode; question?: ExamQuestion } | null>(null);
   const [reclip, setReclip] = useState<{ question: ExamQuestion; clips: number; marked: number } | null>(null);
-  const [notice, setNotice] = useState<{ text: string; tone: 'ok' | 'error'; generate?: boolean } | null>(null);
+  const [notice, setNotice] = useState<{ text: string; tone: 'ok' | 'error'; generate?: boolean; reclipAll?: boolean } | null>(null);
 
   async function handleClipperFinish(result: ClipperResult) {
     setClipper(null);
@@ -163,6 +163,19 @@ export function ExamSetup() {
       setNotice({ text: `Mark scheme clipped: ${result.msClipped} question${result.msClipped === 1 ? '' : 's'} now have a mark-scheme image for markers.`, tone: 'ok' });
     } else if (result.msError) {
       setNotice({ text: `The mark-scheme regions were saved, but clipping them failed: ${result.msError}. Generate Clips will try again.`, tone: 'error' });
+    }
+    if (result.nameZoneApplied) {
+      const n = result.nameZoneApplied.length;
+      let haveClips = false;
+      try {
+        haveClips = (await api.getProgress(id!)).data.questions.some((p) => p.total_clips > 0);
+      } catch { /* the prompt below is a convenience only */ }
+      setNotice({
+        text: `Name zone saved on ${n} question${n === 1 ? '' : 's'}.`
+          + (haveClips ? ' Clips you have already generated still use the old name area, so a name outside it may show. Re-clip them to apply the new zone.' : ''),
+        tone: 'ok',
+        reclipAll: haveClips,
+      });
     }
     // If crops were already generated for a question whose regions changed, they are now out of date.
     if (result.changedQuestion) {
@@ -332,6 +345,11 @@ export function ExamSetup() {
               }`}
             >
               <span className="min-w-0 flex-1">{notice.text}</span>
+              {notice.reclipAll && (
+                <Button variant="primary" onClick={() => { setNotice(null); void runClipping(undefined, false); }} disabled={clipBusy}>
+                  Re-clip all now
+                </Button>
+              )}
               {notice.generate && (
                 <Button variant="primary" onClick={() => { setNotice(null); void runClipping(undefined, true); }} disabled={clipBusy}>
                   Generate clips now
