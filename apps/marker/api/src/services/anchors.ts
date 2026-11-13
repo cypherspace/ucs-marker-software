@@ -17,15 +17,15 @@ export function spread<T>(sorted: T[], limit: number): T[] {
 }
 
 export async function markingAnchors(
-  questionId: string, excludeClipId: string, leadTeacherId: string, maxMarks: number, limit = 4,
+  questionId: string, excludeClipIds: string[], leadTeacherId: string, maxMarks: number, limit = 4,
 ): Promise<MarkAnchor[]> {
   const rows = (await db.raw(
     `SELECT DISTINCT ON (sm.clip_id) sc.clip_image_url, sm.marks_awarded
        FROM script_marks sm JOIN script_clips sc ON sc.id = sm.clip_id
-      WHERE sc.question_id = ? AND sc.id <> ? AND sm.mark_source = 'human'
+      WHERE sc.question_id = ? AND sc.id <> ALL(?::uuid[]) AND sm.mark_source = 'human'
         AND sm.status <> 'pending' AND sm.marks_awarded IS NOT NULL
       ORDER BY sm.clip_id, sm.marked_at DESC NULLS LAST`,
-    [questionId, excludeClipId],
+    [questionId, excludeClipIds],
   )).rows as { clip_image_url: string; marks_awarded: number }[];
   rows.sort((a, b) => a.marks_awarded - b.marks_awarded);
   const chosen = spread(rows, limit);
@@ -49,7 +49,7 @@ export async function humanMarkFor(clipId: string): Promise<number | null> {
 }
 
 export async function judgementAnchors(
-  questionId: string, excludePairId: string, leadTeacherId: string, limit = 3,
+  questionId: string, excludePairIds: string[], leadTeacherId: string, limit = 3,
 ): Promise<JudgementAnchor[]> {
   const rows = (await db.raw(
     `SELECT j.winner_clip_id, p.clip_a_id, a.clip_image_url AS a_url, b.clip_image_url AS b_url
@@ -57,9 +57,9 @@ export async function judgementAnchors(
        JOIN comparative_pairs p ON p.id = j.pair_id
        JOIN script_clips a ON a.id = p.clip_a_id
        JOIN script_clips b ON b.id = p.clip_b_id
-      WHERE p.question_id = ? AND j.source = 'human' AND p.id <> ?
+      WHERE p.question_id = ? AND j.source = 'human' AND p.id <> ALL(?::uuid[])
       ORDER BY j.created_at DESC LIMIT ?`,
-    [questionId, excludePairId, limit],
+    [questionId, excludePairIds, limit],
   )).rows as { winner_clip_id: string; clip_a_id: string; a_url: string; b_url: string }[];
   const out: JudgementAnchor[] = [];
   for (const r of rows) {

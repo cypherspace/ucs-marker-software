@@ -4,7 +4,7 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireQuestionAccess } from '../services/access.js';
-import { aiJudgePair, failureOf } from '../services/ai.js';
+import { aiJudgePairs } from '../services/ai.js';
 import { neighbourPairs, orient, pairKey, randomPairs } from '../services/ranking.js';
 import { computeRanking } from '../services/rankingData.js';
 import type { ComparativeNextPair, ComparativeStatus } from '@marker/shared-types';
@@ -192,7 +192,7 @@ router.post(`${base}/ai-judge/plan`, requireAuth, async (req, res, next) => {
 router.post(`${base}/ai-judge/step`, requireAuth, async (req, res, next) => {
   try {
     const body = z.object({
-      pair_ids: z.array(z.string().uuid()).min(1).max(3),
+      pair_ids: z.array(z.string().uuid()).min(1).max(12),
       guidance: z.string().max(4000).optional(),
       use_examples: z.boolean().default(true),
     }).parse(req.body);
@@ -204,21 +204,19 @@ router.post(`${base}/ai-judge/step`, requireAuth, async (req, res, next) => {
     const pairs = await db('comparative_pairs').whereIn('id', body.pair_ids).andWhere({ question_id: q.question_id })
       .select<{ id: string; clip_a_id: string; clip_b_id: string }[]>('id', 'clip_a_id', 'clip_b_id');
     const byId = new Map(pairs.map((p) => [p.id, p]));
-    const results = await Promise.all(body.pair_ids.map(async (id) => {
-      const pair = byId.get(id);
-      if (!pair) return { pair_id: id, ok: false, error: 'Pair not found for this question' };
-      try {
-        await aiJudgePair(pair, q, { guidance: body.guidance, useExamples: body.use_examples });
-        return { pair_id: id, ok: true };
-      } catch (err) {
-        const failure = failureOf(err);
-        console.error(`AI judging failed for pair ${id} [${failure.code}]:`, (err as Error).message);
-        return {
-          pair_id: id, ok: false, error: failure.message, code: failure.code,
-          retryable: failure.retryable, fatal: failure.fatal, retry_after_seconds: failure.retry_after_seconds,
-        };
-      }
-    }));
+    // One Gemini request judges the whole batch (the mark scheme and reference comparisons are sent once)
+    const outcomes = await aiJudgePairs(pairs, q, { guidance: body.guidance, useExamples: body.use_examples });
+    const results = body.pair_ids.map((id) => {
+      if (!byId.has(id)) return { pair_id: id, ok: false, error: 'Pair not found for this question' };
+      const out = outcomes.get(id);
+      if (out?.ok) return { pair_id: id, ok: true };
+      const failure = out?.failure ?? { code: 'AI_ERROR', message: 'No result was returned for this pair', retryable: true, fatal: false };
+      console.error(`AI judging failed for pair ${id} [${failure.code}]:`, failure.message);
+      return {
+        pair_id: id, ok: false, error: failure.message, code: failure.code,
+        retryable: failure.retryable, fatal: failure.fatal, retry_after_seconds: failure.retry_after_seconds,
+      };
+    });
     res.json({ data: { results } });
   } catch (err) {
     next(err);

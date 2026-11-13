@@ -5,7 +5,7 @@ import { api, HttpError } from '../api';
 import { AppLink, Button, Card, LinkButton, ProgressBar } from '../components/ui';
 import { PageHeader } from '../components/PageHeader';
 import { useBatchRunner } from '../hooks/useBatchRunner';
-import { estimateRun } from '../lib/duration';
+import { describeRun } from '../lib/duration';
 import { AiRunNotice } from '../components/AiRunNotice';
 
 export function ComparativeRanking() {
@@ -29,7 +29,8 @@ export function ComparativeRanking() {
   const [guidance, setGuidance] = useState('');
   const [useExamples, setUseExamples] = useState(true);
   const [plan, setPlan] = useState<{ pair_ids: string[]; total: number; has_mark_scheme: boolean } | null>(null);
-  const runner = useBatchRunner(3);
+  const batchSize = aiQ.data?.data.batch_size ?? 8;
+  const runner = useBatchRunner(batchSize);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['compare-status', examId, questionId] });
@@ -82,6 +83,7 @@ export function ComparativeRanking() {
   const running = runner.state.status === 'running' || runner.state.status === 'paused';
   const roundDone = status.pairs_total > 0 && status.unjudged === 0;
   const aiReady = aiQ.data?.data.configured ?? true;
+  const run = describeRun(plan?.total ?? 0, batchSize, aiQ.data?.data.max_rpm ?? 0, aiQ.data?.data.max_rpd ?? 0);
   const createError = (createMut.error ?? previewMut.error) as Error | null;
 
   return (
@@ -200,8 +202,15 @@ export function ComparativeRanking() {
                     <p>
                       <strong>{plan.total}</strong> comparison{plan.total === 1 ? '' : 's'} will be sent to Gemini (two anonymous images each
                       {useExamples ? ', plus a few reference comparisons' : ''}). Names are blacked out on the clips.
-                      {estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0) && ` To stay within Gemini's limits this will take ${estimateRun(plan.total, aiQ.data?.data.max_rpm ?? 0)}; you can leave this page open and pause at any time.`}
+                      {' '}They go in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'} of up to {batchSize}
+                      {run.duration && <>, which will take {run.duration}; you can leave this page open and pause at any time</>}.
                     </p>
+                    {run.overDailyLimit && (
+                      <p className="font-medium text-red-800">
+                        That is more than the {aiQ.data?.data.max_rpd} requests a day this Gemini key allows. The run will stop when the daily
+                        limit is reached and can be resumed tomorrow.
+                      </p>
+                    )}
                     <div className="flex gap-2">
                       <Button variant="primary" disabled={plan.total === 0} onClick={startAi}>Start</Button>
                       <Button variant="secondary" onClick={() => setPlan(null)}>Cancel</Button>

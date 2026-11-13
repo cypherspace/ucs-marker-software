@@ -35,9 +35,17 @@ export const config = {
   storageBucket: process.env.STORAGE_BUCKET,
   googleApiKey: process.env.GOOGLE_API_KEY ?? '',
   geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
+  // Only for testing against a fake Gemini server
+  geminiBaseUrl: process.env.GEMINI_BASE_URL || undefined,
   // Gemini requests per minute this server will make (the free tier allows only a few). Calls beyond it are
   // queued, not failed. Raise it, or set 0 for no limit, once the key is on a paid plan.
-  geminiMaxRpm: Number(process.env.GEMINI_MAX_RPM ?? 6),
+  geminiMaxRpm: Number(process.env.GEMINI_MAX_RPM ?? 4),
+  // Clips (or pairs) sent to Gemini in ONE request. The free tier allows very few requests a day (20 on the
+  // current key) but plenty of tokens, so AI marking and judging pack several answers into each request.
+  // Raise the limits, and lower this towards 1, once the key is on a paid plan.
+  geminiBatchSize: Math.min(12, Math.max(1, Math.round(Number(process.env.GEMINI_BATCH_SIZE ?? 8)) || 8)),
+  // What the key allows per day, for the run estimate only (nothing here enforces it). 0 = unknown.
+  geminiMaxRpd: Number(process.env.GEMINI_MAX_RPD ?? 20),
   googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? '',
   googleOAuthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
   publicUrl: process.env.PUBLIC_URL ?? '',

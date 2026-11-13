@@ -7,3 +7,16 @@ export function estimateRun(calls: number, rpm: number): string | null {
   const hours = Math.round((minutes / 60) * 2) / 2;
   return `about ${hours} hours`;
 }
+
+export interface RunEstimate {
+  requests: number;            // Gemini requests the run needs (several answers go in each)
+  duration: string | null;     // "about 3 minutes"
+  overDailyLimit: boolean;     // more requests than the key allows in a day
+}
+
+// What a run of `items` answers costs: answers are packed `batchSize` to a request, requests are paced at
+// `rpm` a minute, and the key allows `rpd` requests a day (0 = not known)
+export function describeRun(items: number, batchSize: number, rpm: number, rpd: number): RunEstimate {
+  const requests = items <= 0 ? 0 : Math.ceil(items / Math.max(1, batchSize));
+  return { requests, duration: estimateRun(requests, rpm), overDailyLimit: rpd > 0 && requests > rpd };
+}
