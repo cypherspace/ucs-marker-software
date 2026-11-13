@@ -192,9 +192,6 @@ export function AnnotationCanvas({
       setIsDrawing(true);
       setDrawStart(pos);
       setCurrentPoints([pos.x, pos.y, pos.x, pos.y]);
-    } else if (tool === 'text') {
-      setPendingText(pos);
-      setTextInput('');
     }
   }
 
@@ -208,6 +205,13 @@ export function AnnotationCanvas({
   }
 
   function handleMouseUp(e: PointerEvt) {
+    // The note box opens on release, not on press: opening it on mousedown let the browser's own focus handling for
+    // that same click take focus straight back, which blurred the new box and closed it before anything could be typed.
+    if (tool === 'text' && !readOnly) {
+      const at = getPointer(e);
+      if (at) { setPendingText(at); setTextInput(''); }
+      return;
+    }
     if (!isDrawing || readOnly) return;
     const pos = getPointer(e);
     setIsDrawing(false);
