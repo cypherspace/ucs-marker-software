@@ -88,7 +88,7 @@ export function AnnotationToolbar({
       </div>
 
       <p className="mt-1 text-[11px] leading-tight text-slate-400">
-        <strong>Double-click</strong> to place or remove a tick, cross or mark. Right-click to change tool.
+        <strong>Double-click</strong> to place or remove a tick, cross or mark. Right-click to change tool. <strong>Type a number</strong> to set the mark.
       </p>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { useBackTarget } from '../lib/nav';
@@ -14,6 +14,7 @@ import { ZoomControls } from '../components/ZoomControls';
 import { useZoom } from '../hooks/useZoom';
 import { annotationMark, markTickTotal, nextNumber } from '../lib/annotations';
 import { usePersistedState } from '../hooks/usePersistedState';
+import { applyDigit, isMarkDigitKey, type DigitBuffer } from '../lib/markKeys';
 import type { Annotation, AnnotationData, QueueClip } from '@marker/shared-types';
 import { questionLabel } from '../lib/questionLabel';
 
@@ -174,6 +175,36 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     const i = d.annotations.map(onLayer).lastIndexOf(true);
     return i < 0 ? d : { annotations: d.annotations.filter((_, j) => j !== i) };
   });
+
+  // Typing a number anywhere on the page sets the mark (unless the Text tool is selected or a field has focus).
+  // Backspace / Delete clears a typed mark so the Marks box follows the annotations again.
+  const digits = useRef<DigitBuffer>({ text: '', at: 0 });
+  const [flash, setFlash] = useState(false);
+  useEffect(() => {
+    if (showPages) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      if ((e.key === 'Backspace' || e.key === 'Delete') && !inField && tool !== 'text' && typed !== null) {
+        e.preventDefault();
+        digits.current = { text: '', at: 0 };
+        setTyped(null);
+        return;
+      }
+      if (!isMarkDigitKey(e, tool)) return;
+      e.preventDefault();
+      const now = Date.now();
+      const next = applyDigit(digits.current, e.key, now, maxMarks);
+      digits.current = { text: next, at: now };
+      setTyped(auto !== null && next === String(auto) ? null : next);
+      setFlash(true);
+      clearTimeout(timer);
+      timer = setTimeout(() => setFlash(false), 500);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('keydown', onKey); clearTimeout(timer); };
+  }, [tool, maxMarks, auto, typed, showPages]);
 
   // Esc leaves the converted view
   useEffect(() => {
@@ -340,7 +371,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
                     value={marks}
                     placeholder="0"
                     onChange={(e) => setTyped(auto !== null && e.target.value === String(auto) ? null : e.target.value)}
-                    className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-center text-lg font-semibold focus:border-indigo-500 focus:outline-none"
+                    className={`mt-1 w-full rounded border px-2 py-1.5 text-center text-lg font-semibold focus:border-indigo-500 focus:outline-none ${flash ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-slate-300'}`}
                   />
                   {overriding && (
                     <p className="mt-1 text-[11px] leading-tight text-slate-500">
