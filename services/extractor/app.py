@@ -22,6 +22,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from pipeline.storage import storage
+from pipeline.annotate import annotate_pdf
 from pipeline.student_clipper import clip_question, render_page
 from pipeline.text_render import render_text_page
 
@@ -111,6 +112,18 @@ class RenderRequest(BaseModel):
     page_number: int
     max_width: int = 1200
     mask_zones: list[dict[str, Any]] | None = None
+
+
+class AnnotateRequest(BaseModel):
+    pdf_uri: str
+    pdf_headers: dict[str, str] | None = None
+    # Drawing operations in PDF points (see apps/marker/api/src/services/scriptExport.ts)
+    ops: list[dict[str, Any]] = []
+    # Regions removed from the pages (pixels and text under them are deleted, not just covered)
+    redact_zones: list[dict[str, Any]] = []
+    # A summary page put in front of the script
+    cover_title: str | None = None
+    cover_lines: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -414,3 +427,23 @@ def render(req: RenderRequest):
         media_type="image/png",
         headers={"X-Page-Count": str(page_count)},
     )
+
+
+@app.post("/annotate-script")
+def annotate_script(req: AnnotateRequest):
+    """Draw a teacher's annotations onto the original script PDF and return the new PDF.
+
+    The pages are kept as they are (vector drawing on top of the scan), so the file stays close to the original size.
+    Name zones in redact_zones are truly redacted first, so the name cannot be recovered from the file.
+    """
+    try:
+        pdf_path = _localise(req.pdf_uri, req.pdf_headers)
+    except Exception as exc:
+        logger.error("annotate: cannot access PDF: %s", exc)
+        raise HTTPException(status_code=422, detail=f"Cannot access PDF: {exc}")
+    try:
+        data = annotate_pdf(pdf_path, req.ops, req.redact_zones, req.cover_title, req.cover_lines)
+    except Exception as exc:
+        logger.error("annotate_pdf failed uri=%s: %s", req.pdf_uri, exc)
+        raise HTTPException(status_code=500, detail=f"Annotating failed: {exc}")
+    return Response(content=data, media_type="application/pdf")

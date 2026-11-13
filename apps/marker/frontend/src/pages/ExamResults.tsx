@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useOutletContext, useParams } from 'react-router-dom';
 import { api } from '../api';
+import { AnnotatedExport } from '../components/AnnotatedExport';
 import { Button, Card } from '../components/ui';
+import { saveBlob } from '../lib/saveFile';
 import type { Exam, MarkCombine } from '@marker/shared-types';
 import { COMBINES, COMBINE_LABELS } from '../lib/markCombine';
 import { questionLabel } from '../lib/questionLabel';
@@ -31,6 +33,16 @@ export function ExamResults() {
   const [combine, setCombine] = useState<MarkCombine | undefined>(undefined);
   const [cls, setCls] = useState<ClassChoice>(undefined);
   const [msg, setMsg] = useState<string | null>(null);
+  const [pdfNames, setPdfNames] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+
+  async function downloadPdf(scriptId: string) {
+    setPdfBusy(scriptId); setMsg(null);
+    try {
+      const pdf = await api.annotatedPdf(scriptId, pdfNames);
+      saveBlob(new Blob([pdf.bytes as BlobPart], { type: 'application/pdf' }), pdf.filename);
+    } catch (e) { setMsg((e as Error).message); } finally { setPdfBusy(null); }
+  }
 
   const resultsQ = useQuery({ queryKey: ['results', id, toValue(cls), combine ?? 'exam'], queryFn: () => api.getResults(id!, cls, combine), placeholderData: (prev) => prev });
 
@@ -117,6 +129,7 @@ export function ExamResults() {
         </div>
       </div>
       {msg && <p role="status" className="mb-4 text-sm text-slate-600">{msg}</p>}
+      {isLead && r.rows.length > 0 && <AnnotatedExport examId={id!} classGroup={cls} names={pdfNames} onNames={setPdfNames} />}
 
       {r.rows.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-slate-500">
@@ -166,6 +179,7 @@ export function ExamResults() {
                   {showClassColumn && <th className="px-4 py-2">Class</th>}
                   {r.questions.map((q) => <th key={q.id} className="px-3 py-2 text-center">Q{questionLabel(q.question_number)}</th>)}
                   <th className="px-4 py-2 text-center">Total</th>
+                  {isLead && <th className="px-4 py-2"><span className="sr-only">Annotated PDF</span></th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -185,6 +199,19 @@ export function ExamResults() {
                       );
                     })}
                     <td className="px-4 py-2 text-center font-medium tabular-nums">{row.possible > 0 ? `${row.total} / ${row.possible}` : '–'}</td>
+                    {isLead && (
+                      <td className="px-4 py-2 text-right">
+                        <button
+                          type="button"
+                          disabled={pdfBusy !== null}
+                          onClick={() => void downloadPdf(row.script_id)}
+                          title="Download this script as a PDF with the marking drawn on"
+                          className="rounded px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
+                        >
+                          {pdfBusy === row.script_id ? 'Making…' : 'PDF'}
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

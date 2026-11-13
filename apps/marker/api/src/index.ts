@@ -9,6 +9,7 @@ import { isGcsUri, storage } from './services/storage.js';
 import authRouter from './routes/auth.js';
 import examsRouter from './routes/exams.js';
 import practiceRouter from './routes/practice.js';
+import scriptExportRouter from './routes/scriptExport.js';
 import practiceStudentRouter from './routes/practiceStudent.js';
 import scriptsRouter from './routes/scripts.js';
 import marksRouter from './routes/marks.js';
@@ -52,6 +53,7 @@ app.use('/api/v1', clipEditRouter);
 app.use('/api/v1', agreementRouter);
 app.use('/api/v1/practice', practiceStudentRouter);
 app.use('/api/v1', practiceRouter);
+app.use('/api/v1', scriptExportRouter);
 app.use('/api/v1', examsRouter);
 
 // `/files/?u=<uri>` — resolve storage URI to bytes (GCS: 302 redirect; local: stream)

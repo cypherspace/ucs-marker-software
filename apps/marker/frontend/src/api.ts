@@ -326,6 +326,22 @@ export const api = {
     }),
   studentSummary: (setId: string) => http<ApiSuccess<StudentSummary>>(`${A}/practice/sets/${setId}/summary`),
 
+  // Annotated scripts (lead teacher / admin): the original PDF with the marking drawn on
+  annotatedScripts: (examId: string) =>
+    http<ApiSuccess<{ exam_name: string; scripts: { id: string; student_number: string; class_group: string | null; clips: number }[] }>>(`${A}/exams/${examId}/annotated-scripts`),
+  annotatedPdf: async (scriptId: string, names: boolean): Promise<{ bytes: Uint8Array; filename: string }> => {
+    const res = await fetch(`${A}/scripts/${scriptId}/annotated.pdf${names ? '?names=1' : ''}`, { credentials: 'include' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
+      throw new HttpError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`, (body as { code?: string }).code);
+    }
+    const disp = res.headers.get('content-disposition') ?? '';
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(disp);
+    const plain = /filename="([^"]+)"/i.exec(disp);
+    return { bytes: new Uint8Array(await res.arrayBuffer()), filename: star ? decodeURIComponent(star[1]) : plain?.[1] ?? 'script.pdf' };
+  },
+
   // AI
   aiStatus: () => http<ApiSuccess<{ configured: boolean; model: string; max_rpm: number; batch_size: number; step_size: number; max_rpd: number }>>(`${A}/ai/status`),
   runOcr: (clipId: string, refresh = false) =>

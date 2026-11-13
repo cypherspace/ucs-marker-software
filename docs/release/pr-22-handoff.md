@@ -12,6 +12,8 @@ Written 2026-11-13 by a cloud session for the local session on the owner's own c
 - Tested in the cloud session: `npm test`, `npm run build`, `apps/marker/api/scripts/practice-api-check.py` (about 60 API checks with real seeded sessions), `student-fence-sweep.py` (72 routes, 0 reachable by a student) and a Playwright run of the whole student flow. **Not tested: real Google sign-in.**
 - The cloud session has no gcloud credentials, so it could not apply the migrations. The owner said they could not do it from the computer they were using at the time.
 
+- The branch also carries a later, migration-free feature: **annotated script export** (see the CLAUDE.md bullet). It needs the extractor redeployed too, which the normal merge to `main` does. Check it on the live site after the deploy: Results tab, "PDF" on a row and "Download all (zip)".
+
 ## Next steps, in order
 
 1. `git fetch; git checkout claude/brave-meitner-62xn07; git pull; npm ci` so `infra/db/marker/migrate-cloudsql.mjs` and migrations 011 to 013 are present.
