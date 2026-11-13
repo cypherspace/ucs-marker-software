@@ -206,7 +206,9 @@ export function AiMarking() {
             <p>
               <strong>{plan.total}</strong> clip{plan.total === 1 ? '' : 's'} will be sent to Gemini
               {useExamples ? ', along with a few teacher-marked reference examples' : ''}. This uses your Gemini quota.
-              {' '}They go in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'} of up to {batchSize}
+              {' '}{batchSize === 1
+                ? <>Each is marked on its own, in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'}</>
+                : <>They go in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'} of up to {batchSize}</>}
               {run.duration && <>, which will take {run.duration}; you can leave this page open and pause at any time</>}.
               {plan.total === 0 && ' There is nothing to do for these settings.'}
             </p>

@@ -202,7 +202,9 @@ export function ComparativeRanking() {
                     <p>
                       <strong>{plan.total}</strong> comparison{plan.total === 1 ? '' : 's'} will be sent to Gemini (two anonymous images each
                       {useExamples ? ', plus a few reference comparisons' : ''}). Names are blacked out on the clips.
-                      {' '}They go in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'} of up to {batchSize}
+                      {' '}{batchSize === 1
+                        ? <>Each is marked on its own, in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'}</>
+                        : <>They go in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'} of up to {batchSize}</>}
                       {run.duration && <>, which will take {run.duration}; you can leave this page open and pause at any time</>}.
                     </p>
                     {run.overDailyLimit && (
