@@ -19,6 +19,11 @@ import { ComparativeMarking } from './pages/ComparativeMarking';
 import { ComparativeRanking } from './pages/ComparativeRanking';
 import { AiMarking } from './pages/AiMarking';
 import { StudentHome } from './pages/practice/StudentHome';
+import { PracticeSets } from './pages/PracticeSets';
+import { PracticeSetDetail } from './pages/PracticeSetDetail';
+import { Join } from './pages/practice/Join';
+import { PracticeMarking } from './pages/practice/PracticeMarking';
+import { PracticeSummary } from './pages/practice/PracticeSummary';
 
 export function App() {
   const navigate = useNavigate();
@@ -34,19 +39,21 @@ export function App() {
     },
   });
 
+  const onJoin = location.pathname.startsWith('/join/');
+
   useEffect(() => {
     const onUnauth = () => {
-      if (location.pathname !== '/login') navigate('/login', { replace: true });
+      if (location.pathname !== '/login' && !onJoin) navigate('/login', { replace: true });
     };
     window.addEventListener('marker:unauthorized', onUnauth);
     return () => window.removeEventListener('marker:unauthorized', onUnauth);
-  }, [navigate, location.pathname]);
+  }, [navigate, location.pathname, onJoin]);
 
   useEffect(() => {
-    if (meQuery.error instanceof HttpError && meQuery.error.status === 401 && location.pathname !== '/login') {
+    if (meQuery.error instanceof HttpError && meQuery.error.status === 401 && location.pathname !== '/login' && !onJoin) {
       navigate('/login', { replace: true });
     }
-  }, [meQuery.error, location.pathname, navigate]);
+  }, [meQuery.error, location.pathname, navigate, onJoin]);
 
   const me = meQuery.data?.data;
 
@@ -54,6 +61,11 @@ export function App() {
     try { await api.logout(); } catch { /* ignore */ }
     qc.removeQueries({ queryKey: ['auth', 'me'] });
     navigate('/login', { replace: true });
+  }
+
+  // A class link: handles its own sign-in (a student sign-in that comes back here)
+  if (onJoin) {
+    return <Routes><Route path="/join/:token" element={<Join />} /></Routes>;
   }
 
   if (location.pathname === '/login') {
@@ -85,6 +97,9 @@ export function App() {
         <main className="min-h-0 flex-1 overflow-auto">
           <Routes>
             <Route path="/practice" element={<StudentHome />} />
+            <Route path="/practice/:setId" element={<PracticeMarking />} />
+            <Route path="/practice/:setId/summary" element={<PracticeSummary />} />
+            <Route path="/practice/:setId/:itemId" element={<PracticeMarking />} />
             <Route path="*" element={<Navigate to="/practice" replace />} />
           </Routes>
         </main>
@@ -121,12 +136,14 @@ export function App() {
           <Route path="/marking/ai/:id" element={<AiMarking />} />
           <Route path="/exams" element={<ExamList />} />
           <Route path="/exams/new" element={<CreateExam />} />
+          <Route path="/practice-sets/:setId" element={<PracticeSetDetail />} />
           <Route path="/exams/:id/agreement/:questionId" element={<MarkingAgreement />} />
           <Route path="/exams/:id" element={<ExamPage />}>
             <Route index element={<ExamProgress />} />
             <Route path="results" element={<ExamResults />} />
             <Route path="setup" element={<ExamSetup />} />
             <Route path="upload" element={<ExamUpload />} />
+            <Route path="practice" element={<PracticeSets />} />
           </Route>
           {/* Addresses used before the exam page and Marking area existed */}
           <Route path="/my-exams" element={<Navigate to="/marking" replace />} />

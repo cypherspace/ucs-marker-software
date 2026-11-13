@@ -23,6 +23,8 @@ export function pathLabel(path: string): string {
   if (/^\/exams\/[^/]+\/setup$/.test(p)) return 'Setup';
   if (/^\/exams\/[^/]+\/results$/.test(p)) return 'Results';
   if (/^\/exams\/[^/]+\/upload$/.test(p)) return 'Upload scripts';
+  if (/^\/exams\/[^/]+\/practice$/.test(p)) return 'Student practice';
+  if (/^\/practice-sets\//.test(p)) return 'Practice set';
   if (/^\/exams\/[^/]+(\/progress)?$/.test(p)) return 'Exam';
   if (/^\/compare\/[^/]+\/[^/]+\/ranking$/.test(p)) return 'Ranking';
   if (/^\/compare\//.test(p)) return 'Comparisons';

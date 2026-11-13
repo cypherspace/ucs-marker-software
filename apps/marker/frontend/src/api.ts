@@ -5,6 +5,7 @@ import type {
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
   ComparativeStatus, ComparativeNextPair, Ranking, ClipSettings, ClipRegion, NameZone, ClipListItem,
   MarkCombine, QuestionAgreement,
+  PracticeSetSummary, PracticeSetDetail, PracticeResults, StudentSetListItem, StudentSetView, StudentItemView, PracticeReveal, StudentSummary,
 } from '@marker/shared-types';
 
 export class HttpError extends Error {
@@ -290,6 +291,40 @@ export const api = {
   // Teachers' marks side by side (lead teacher / admin)
   getAgreement: (examId: string, questionId: string) =>
     http<ApiSuccess<QuestionAgreement>>(`${A}/exams/${examId}/questions/${questionId}/agreement`),
+
+
+  // Practice marking, teacher side (lead teacher / admin)
+  listPracticeSets: (examId: string) => http<ApiSuccess<PracticeSetSummary[]>>(`${A}/exams/${examId}/practice-sets`),
+  createPracticeSet: (examId: string, body: { name: string; question_ids: string[]; per_question: number; only_settled: boolean; show_mark_scheme: boolean }) =>
+    http<ApiSuccess<PracticeSetSummary>>(`${A}/exams/${examId}/practice-sets`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    }),
+  getPracticeSet: (id: string) => http<ApiSuccess<PracticeSetDetail>>(`${A}/practice-sets/${id}`),
+  addPracticeLink: (id: string, className: string) =>
+    http<ApiSuccess<{ id: string; token: string; url: string }>>(`${A}/practice-sets/${id}/links`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ class_name: className }),
+    }),
+  revokePracticeLink: (linkId: string) => http<ApiSuccess<{ ok: true }>>(`${A}/practice-links/${linkId}/revoke`, { method: 'POST' }),
+  setPracticeClosed: (id: string, closed: boolean) =>
+    http<ApiSuccess<{ ok: true }>>(`${A}/practice-sets/${id}/${closed ? 'close' : 'reopen'}`, { method: 'POST' }),
+  deletePracticeSet: (id: string) => http<ApiSuccess<{ ok: true }>>(`${A}/practice-sets/${id}`, { method: 'DELETE' }),
+  getPracticeResults: (id: string) => http<ApiSuccess<PracticeResults>>(`${A}/practice-sets/${id}/results`),
+  exportPracticeResults: (id: string) =>
+    http<ApiSuccess<{ csv: string; filename: string }>>(`${A}/practice-sets/${id}/results?format=csv`),
+
+  // Practice marking, student side
+  joinPractice: (token: string) =>
+    http<ApiSuccess<{ set_id: string; set_name: string }>>(`${A}/practice/join`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }),
+    }),
+  studentSets: () => http<ApiSuccess<StudentSetListItem[]>>(`${A}/practice/sets`),
+  studentSet: (id: string) => http<ApiSuccess<StudentSetView>>(`${A}/practice/sets/${id}`),
+  studentItem: (id: string) => http<ApiSuccess<StudentItemView>>(`${A}/practice/items/${id}`),
+  submitPractice: (itemId: string, marks: number, annotations: unknown[]) =>
+    http<ApiSuccess<PracticeReveal>>(`${A}/practice/items/${itemId}/submit`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ marks_awarded: marks, annotation_data: annotations }),
+    }),
+  studentSummary: (setId: string) => http<ApiSuccess<StudentSummary>>(`${A}/practice/sets/${setId}/summary`),
 
   // AI
   aiStatus: () => http<ApiSuccess<{ configured: boolean; model: string; max_rpm: number; batch_size: number; step_size: number; max_rpd: number }>>(`${A}/ai/status`),
