@@ -9,7 +9,7 @@ Run it against a local API (not AUTH_DISABLED) after seeding a student and a sta
   python3 apps/marker/api/scripts/student-fence-sweep.py        # from the repo root
 
 It reads every `router.get/post/...('/path')` in routes/*.ts, calls each one as the student and expects 403 STUDENT_FORBIDDEN.
-Routes under /practice are for students and are skipped. Anything else that is not refused is printed and the exit code is 1.
+The routes in routes/practiceStudent.ts (mounted at /api/v1/practice) are for students and are skipped; the teacher side of practice sets (routes/practice.ts) is swept like everything else. Anything else that is not refused is printed and the exit code is 1.
 """
 import re, glob, json, sys, urllib.request, urllib.error
 U='11111111-1111-1111-1111-111111111111'
@@ -32,8 +32,7 @@ for f in glob.glob('apps/marker/api/src/routes/*.ts'):
 routes.append(('index.ts','GET','','/files/?u=/etc/passwd'))
 bad=0; counts={}
 for name,method,mount,path in routes:
-    if path.startswith('/practice'): continue
-    if name=='auth.ts' or path.startswith('/practice'): continue
+    if name in ('auth.ts','practiceStudent.ts'): continue  # sign-in, and the routes students are meant to use
     st,body=call(method,url_for(mount,path),'student-sid-1')
     code=''
     try: code=json.loads(body).get('code','')

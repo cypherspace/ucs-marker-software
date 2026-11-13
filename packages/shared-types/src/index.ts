@@ -522,3 +522,131 @@ export interface QuestionAgreement {
     mean_spread: number | null;
   };
 }
+
+// ─── Practice marking (students mark teacher-marked work and compare) ────────
+
+export interface PracticeStats {
+  compared: number;
+  exact_pct: number | null;
+  within_one_pct: number | null;
+  mean_abs_diff: number | null;
+  // Positive: the student marks higher than the teachers on average
+  mean_signed_diff: number | null;
+}
+
+// For teachers
+export interface PracticeSetSummary {
+  id: string;
+  exam_id: string;
+  name: string;
+  created_at: string;
+  closed_at: string | null;
+  show_mark_scheme: boolean;
+  items: number;
+  links: number;
+  students: number;
+  submitted: number;
+}
+
+export interface PracticeItemInfo {
+  id: string;
+  position: number;
+  clip_id: string;
+  question_id: string;
+  question_number: string;
+  max_marks: number;
+  // The teachers' combined mark (null if no teacher mark is left)
+  reference: number | null;
+}
+
+export interface PracticeLinkInfo {
+  id: string;
+  class_name: string;
+  token: string;
+  url: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  students: number;
+}
+
+export interface PracticeSetDetail {
+  set: PracticeSetSummary;
+  items: PracticeItemInfo[];
+  links: PracticeLinkInfo[];
+}
+
+export interface PracticeResults {
+  set: PracticeSetSummary;
+  overall: PracticeStats;
+  classes: {
+    link_id: string;
+    class_name: string;
+    students: { student_id: string; name: string | null; email: string; done: number; total: number; stats: PracticeStats }[];
+  }[];
+  items: {
+    item_id: string;
+    position: number;
+    question_number: string;
+    max_marks: number;
+    reference: number | null;
+    answers: number;
+    // How many students gave each mark, 0..max
+    histogram: number[];
+    exact_pct: number | null;
+    mean_signed_diff: number | null;
+  }[];
+}
+
+// For students: nothing here says which script or student a clip came from
+export interface StudentSetListItem {
+  id: string;
+  name: string;
+  class_name: string;
+  total: number;
+  done: number;
+  closed: boolean;
+}
+
+export interface StudentSetView {
+  id: string;
+  name: string;
+  closed: boolean;
+  items: { item_id: string; position: number; done: boolean }[];
+}
+
+export interface PracticeReveal {
+  your_mark: number;
+  teacher_mark: number | null;
+  difference: number | null;
+  annotation_data: unknown;
+}
+
+export interface StudentItemView {
+  item_id: string;
+  set_id: string;
+  set_name: string;
+  position: number;
+  total: number;
+  max_marks: number;
+  question_label: string;
+  clip_url: string;
+  ms_url: string | null;
+  closed: boolean;
+  submitted: boolean;
+  // Only present once this student has submitted their own mark
+  result: PracticeReveal | null;
+  prev_id: string | null;
+  next_id: string | null;
+  next_undone_id: string | null;
+}
+
+export interface StudentSummary {
+  set_name: string;
+  finished: boolean;
+  done: number;
+  total: number;
+  stats: PracticeStats;
+  bias_note: string | null;
+  items: { item_id: string; position: number; question_label: string; max_marks: number; your_mark: number; teacher_mark: number | null; difference: number | null }[];
+}
