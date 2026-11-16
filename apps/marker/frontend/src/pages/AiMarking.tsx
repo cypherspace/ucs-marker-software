@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -7,18 +7,21 @@ import { Button, Card, ProgressBar } from '../components/ui';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 import { describeRun } from '../lib/duration';
 import { AiRunNotice } from '../components/AiRunNotice';
-import type { AiMode, AiPlan, AiScopeType, AiStrictness } from '@marker/shared-types';
+import type { AiMode, AiScopeType, AiStrictness } from '@marker/shared-types';
 import { questionLabel } from '../lib/questionLabel';
 
 const SCOPES: [AiScopeType, string, string][] = [
   ['unmarked', 'Clips with no AI result yet', 'Skips anything the AI has already done.'],
   ['human_marked', 'Clips teachers have already marked', 'Best for checking how closely the AI agrees with your marking.'],
-  ['sample', 'A random sample', 'A quick test on a few clips that have no AI result yet.'],
+  ['sample', 'A random sample', 'A quick test on a few clips that have no AI result yet (that many for each ticked question).'],
   ['all', 'Everything again', 'Replaces existing AI marks. Teachers\' marks are never changed.'],
 ];
 
 const MODES: [AiMode, string][] = [['marks', 'Marks'], ['feedback', 'Feedback'], ['both', 'Marks and feedback']];
 const STRICTNESS: [AiStrictness, string][] = [['strict', 'Strict'], ['balanced', 'Balanced'], ['lenient', 'Lenient']];
+
+// What a run of several ticked questions will do: each question's clips, in the exam's order
+interface MultiPlan { parts: { question_id: string; label: string; clip_ids: string[] }[]; total: number }
 
 const signed = (n: number) => (n > 0 ? `+${n}` : String(n));
 
@@ -31,60 +34,87 @@ export function AiMarking() {
   const questionsQ = useQuery({ queryKey: ['questions', examId], queryFn: () => api.listQuestions(examId!) });
   const aiQ = useQuery({ queryKey: ['ai-status'], queryFn: () => api.aiStatus() });
 
-  // ?q= opens the page on a particular question (from the AI marking overview)
-  const [questionId, setQuestionId] = useState(search.get('q') ?? '');
+  // The questions to send, ticked in a list. ?q= opens the page with one ticked (from the AI marking overview).
+  const [selected, setSelected] = useState<string[]>(() => (search.get('q') ? [search.get('q') as string] : []));
+  // Guidance is per question: each has its own mark scheme and wording
+  const [guidanceBy, setGuidanceBy] = useState<Record<string, string>>({});
+  // The question whose results are shown below (any question, not only the ones ticked)
+  const [viewId, setViewId] = useState('');
   const [scope, setScope] = useState<AiScopeType>('unmarked');
   const [sampleCount, setSampleCount] = useState(10);
   const [mode, setMode] = useState<AiMode>('marks');
   const [strictness, setStrictness] = useState<AiStrictness>('balanced');
-  const [guidance, setGuidance] = useState('');
   const [useExamples, setUseExamples] = useState(true);
-  const [plan, setPlan] = useState<AiPlan | null>(null);
+  const [plan, setPlan] = useState<MultiPlan | null>(null);
   const [onlyDisagreements, setOnlyDisagreements] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const batchSize = aiQ.data?.data.batch_size ?? 5; // answers per Gemini request
   const runner = useBatchRunner(aiQ.data?.data.step_size ?? batchSize); // answers per step (several requests at once)
 
   const questions = questionsQ.data?.data ?? [];
+  // With nothing ticked yet, start with the first question ticked
+  const started = useRef(false);
   useEffect(() => {
-    if (!questionId && questions.length > 0) setQuestionId(questions[0].id);
-  }, [questionId, questions]);
-  const question = questions.find((q) => q.id === questionId);
+    if (started.current || questions.length === 0) return;
+    started.current = true;
+    if (selected.length === 0) setSelected([questions[0].id]);
+  }, [selected, questions]);
+  const chosen = questions.filter((q) => selected.includes(q.id)); // in the exam's order
+  const viewQuestionId = viewId || chosen[0]?.id || '';
 
   const resultsQ = useQuery({
-    queryKey: ['ai-results', examId, questionId],
-    queryFn: () => api.aiResults(examId!, questionId),
-    enabled: Boolean(questionId),
+    queryKey: ['ai-results', examId, viewQuestionId],
+    queryFn: () => api.aiResults(examId!, viewQuestionId),
+    enabled: Boolean(viewQuestionId),
   });
 
-  const settings = { question_id: questionId, mode, strictness, guidance, use_examples: useExamples };
+  const settingsFor = (questionId: string) => ({
+    question_id: questionId, mode, strictness, guidance: guidanceBy[questionId] ?? '', use_examples: useExamples,
+  });
   const refresh = () => {
-    qc.invalidateQueries({ queryKey: ['ai-results', examId, questionId] });
+    qc.invalidateQueries({ queryKey: ['ai-results', examId] });
     qc.invalidateQueries({ queryKey: ['progress', examId] });
     qc.invalidateQueries({ queryKey: ['home'] });
   };
 
+  // One plan per ticked question, put together
   const planMut = useMutation({
-    mutationFn: () => api.aiPlan(examId!, settings, { type: scope, count: scope === 'sample' ? sampleCount : undefined }),
-    onSuccess: (r) => setPlan(r.data),
+    mutationFn: async (): Promise<MultiPlan> => {
+      const scopeArg = { type: scope, count: scope === 'sample' ? sampleCount : undefined };
+      const parts = await Promise.all(chosen.map(async (q) => ({ question: q, plan: (await api.aiPlan(examId!, settingsFor(q.id), scopeArg)).data })));
+      return { parts: parts.map((p) => ({ question_id: p.question.id, label: questionLabel(p.question.question_number), clip_ids: p.plan.clip_ids })), total: parts.reduce((n, p) => n + p.plan.total, 0) };
+    },
+    onSuccess: (r) => setPlan(r),
   });
 
   function start() {
     if (!plan) return;
-    const ids = plan.clip_ids;
+    const questionOf = new Map(plan.parts.flatMap((p) => p.clip_ids.map((id) => [id, p.question_id] as const)));
+    const ids = plan.parts.flatMap((p) => p.clip_ids);
     setPlan(null);
     runner.start(ids, async (batch) => {
-      const res = await api.aiStep(examId!, settings, batch);
-      return res.data.results.map((r) => ({ id: r.clip_id, ok: r.ok, error: r.error, code: r.code, retryable: r.retryable, fatal: r.fatal, retryAfter: r.retry_after_seconds }));
+      // A step can hold clips from two questions; each question is its own request (its own mark scheme and guidance)
+      const groups = new Map<string, string[]>();
+      for (const id of batch) groups.set(questionOf.get(id)!, [...(groups.get(questionOf.get(id)!) ?? []), id]);
+      const answers = await Promise.all([...groups].map(([qid, clipIds]) => api.aiStep(examId!, settingsFor(qid), clipIds)));
+      return answers.flatMap((res) => res.data.results.map((r) => ({
+        id: r.clip_id, ok: r.ok, error: r.error, code: r.code, retryable: r.retryable, fatal: r.fatal, retryAfter: r.retry_after_seconds,
+      })));
     });
+  }
+
+  function toggle(id: string, on: boolean) {
+    setSelected((cur) => (on ? [...cur, id] : cur.filter((x) => x !== id)));
+    setPlan(null);
   }
 
   if (examQ.isLoading || questionsQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
   const run = describeRun(plan?.total ?? 0, batchSize, aiQ.data?.data.max_rpm ?? 0, aiQ.data?.data.max_rpd ?? 0);
   const configured = aiQ.data?.data.configured ?? true;
-  const hasMs = Boolean(question?.ms_clip_image_url);
-  const needsGuidance = !hasMs && !guidance.trim();
+  // A question with no mark scheme region needs guidance typed for it
+  const lacking = chosen.filter((q) => !q.ms_clip_image_url && !(guidanceBy[q.id] ?? '').trim());
+  const needsGuidance = lacking.length > 0;
   const running = runner.state.status === 'running' || runner.state.status === 'paused';
   const results = resultsQ.data?.data;
   const rows = (results?.rows ?? []).filter((r) => r.ai_mark !== null || r.ai_feedback);
@@ -109,18 +139,22 @@ export function AiMarking() {
       )}
 
       <Card className="mb-6 space-y-5 p-5">
-        <label className="grid gap-1 text-sm font-medium text-slate-700">
-          Question
-          <select
-            value={questionId}
-            onChange={(e) => { setQuestionId(e.target.value); setPlan(null); runner.reset(); setOpen(null); }}
-            className="max-w-xs rounded border border-slate-300 px-2 py-2 text-sm font-normal"
-          >
+        <fieldset disabled={running}>
+          <legend className="mb-1 text-sm font-medium text-slate-700">Questions</legend>
+          <div className="mb-2 flex gap-3 text-xs">
+            <button type="button" className="text-indigo-600 hover:underline" onClick={() => { setSelected(questions.map((q) => q.id)); setPlan(null); }}>Tick all</button>
+            <button type="button" className="text-indigo-600 hover:underline" onClick={() => { setSelected([]); setPlan(null); }}>Clear</button>
+            <span className="text-slate-500">{selected.length} of {questions.length} ticked</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
             {questions.map((q) => (
-              <option key={q.id} value={q.id}>Q{questionLabel(q.question_number)} ({q.max_marks} marks)</option>
+              <label key={q.id} className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-sm ${selected.includes(q.id) ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200'}`}>
+                <input type="checkbox" checked={selected.includes(q.id)} onChange={(e) => toggle(q.id, e.target.checked)} />
+                Q{questionLabel(q.question_number)} <span className="text-xs text-slate-500">({q.max_marks} mark{q.max_marks === 1 ? '' : 's'}{q.ms_clip_image_url ? '' : ', no mark scheme'})</span>
+              </label>
             ))}
-          </select>
-        </label>
+          </div>
+        </fieldset>
 
         <fieldset>
           <legend className="mb-1 text-sm font-medium text-slate-700">Which clips</legend>
@@ -167,18 +201,24 @@ export function AiMarking() {
           </fieldset>
         </div>
 
-        <div>
-          <label className="grid gap-1 text-sm font-medium text-slate-700">
-            Marking guidance {hasMs ? <span className="text-xs font-normal text-slate-500">(optional: the mark scheme region for this question is used too)</span>
-              : <span className="text-xs font-normal text-amber-700">(needed: this question has no mark scheme region)</span>}
-            <textarea
-              value={guidance}
-              onChange={(e) => setGuidance(e.target.value)}
-              rows={3}
-              placeholder="For example: 1 mark for each correct definition; accept equivalent wording."
-              className="rounded border border-slate-300 px-2 py-1.5 text-sm font-normal"
-            />
-          </label>
+        <div className="space-y-3">
+          {chosen.map((q) => {
+            const hasMs = Boolean(q.ms_clip_image_url);
+            return (
+              <label key={q.id} className="grid gap-1 text-sm font-medium text-slate-700">
+                Marking guidance for Q{questionLabel(q.question_number)}{' '}
+                {hasMs ? <span className="text-xs font-normal text-slate-500">(optional: the mark scheme region for this question is used too)</span>
+                  : <span className="text-xs font-normal text-amber-700">(needed: this question has no mark scheme region)</span>}
+                <textarea
+                  value={guidanceBy[q.id] ?? ''}
+                  onChange={(e) => setGuidanceBy((g) => ({ ...g, [q.id]: e.target.value }))}
+                  rows={hasMs ? 2 : 3}
+                  placeholder="For example: 1 mark for each correct definition; accept equivalent wording."
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm font-normal"
+                />
+              </label>
+            );
+          })}
         </div>
 
         <label className="flex items-start gap-2 text-sm text-slate-700">
@@ -186,7 +226,7 @@ export function AiMarking() {
           <span>
             Use teachers' marked examples as reference points
             <span className="block text-xs text-slate-500">
-              Shows the AI up to four clips teachers have marked on this question, spread from low to high marks. Needs some marking done first.
+              Shows the AI up to four clips teachers have marked on each question, spread from low to high marks. Needs some marking done first.
             </span>
           </span>
         </label>
@@ -204,7 +244,8 @@ export function AiMarking() {
         ) : plan ? (
           <div role="alert" className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
             <p>
-              <strong>{plan.total}</strong> clip{plan.total === 1 ? '' : 's'} will be sent to Gemini
+              <strong>{plan.total}</strong> clip{plan.total === 1 ? '' : 's'}
+              {plan.parts.length > 1 && <> across {plan.parts.length} questions ({plan.parts.map((p) => `Q${p.label}: ${p.clip_ids.length}`).join(', ')})</>} will be sent to Gemini
               {useExamples ? ', along with a few teacher-marked reference examples' : ''}. This uses your Gemini quota.
               {' '}{batchSize === 1
                 ? <>Each is marked on its own, in <strong>{run.requests}</strong> request{run.requests === 1 ? '' : 's'}</>
@@ -224,9 +265,14 @@ export function AiMarking() {
             </div>
           </div>
         ) : (
-          <Button variant="primary" disabled={!configured || !questionId || needsGuidance || planMut.isPending} onClick={() => planMut.mutate()}>
-            {planMut.isPending ? 'Checking…' : 'Review and run'}
-          </Button>
+          <div className="space-y-1">
+            <Button variant="primary" disabled={!configured || chosen.length === 0 || needsGuidance || planMut.isPending} onClick={() => planMut.mutate()}>
+              {planMut.isPending ? 'Checking…' : chosen.length > 1 ? `Review and run ${chosen.length} questions` : 'Review and run'}
+            </Button>
+            {needsGuidance && (
+              <p className="text-xs text-amber-700">Add guidance for {lacking.map((q) => `Q${questionLabel(q.question_number)}`).join(', ')} (no mark scheme region), or untick {lacking.length === 1 ? 'it' : 'them'}.</p>
+            )}
+          </div>
         )}
         {planMut.error && <p role="alert" className="text-sm text-red-700">{(planMut.error as Error).message}</p>}
         <AiRunNotice state={runner.state} onResume={runner.resume} onDismiss={runner.reset} />
@@ -241,6 +287,12 @@ export function AiMarking() {
       <Card>
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-slate-200 px-4 py-3">
           <h2 className="font-medium text-slate-700">Teachers and AI compared</h2>
+          <label className="flex items-center gap-1.5 text-xs text-slate-600">
+            Question
+            <select value={viewQuestionId} onChange={(e) => { setViewId(e.target.value); setOpen(null); }} className="rounded border border-slate-300 px-1.5 py-1 text-sm">
+              {questions.map((q) => <option key={q.id} value={q.id}>Q{questionLabel(q.question_number)}</option>)}
+            </select>
+          </label>
           {results && results.stats.compared > 0 && (
             <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-600">
               <span><strong>{results.stats.compared}</strong> clips with both</span>

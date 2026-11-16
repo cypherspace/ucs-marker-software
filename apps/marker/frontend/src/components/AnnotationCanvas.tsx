@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group } from 'react-konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import useImage from 'use-image';
+import { useClipImage } from '../lib/clipImageCache';
 import type { Annotation } from '@marker/shared-types';
 import { MARK_COLOR, TOOL_LABELS, TOOLS, type Tool } from './AnnotationToolbar';
 import { findPointAt, isPointType } from '../lib/annotations';
@@ -116,7 +116,7 @@ export function AnnotationCanvas({
   readOnly = false, markTickCount, maxMarkTicks,
 }: Props) {
   const [retry, setRetry] = useState(0);
-  const [image, imageStatus] = useImage(retry ? `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}r=${retry}` : imageUrl, 'anonymous');
+  const [image, imageStatus] = useClipImage(retry ? `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}r=${retry}` : imageUrl);
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [currentPoints, setCurrentPoints] = useState<number[]>([]);

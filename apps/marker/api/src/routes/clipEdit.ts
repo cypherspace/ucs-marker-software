@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
-import { storage } from '../services/storage.js';
-import { uploadFile } from '../services/drive.js';
+import { moveToDrive } from '../services/driveCopy.js';
 import { scriptPdfSource } from '../services/scriptSource.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { requireAuth } from '../middleware/requireAuth.js';
@@ -70,17 +69,7 @@ async function makeClip(script: ScriptRow, questionId: string, regions: Region[]
   if (!uri) return { fail: { status: 502, error: 'The clipping service returned no image', code: 'EXTRACTOR_ERROR' } };
 
   if (script.use_drive_storage && script.drive_folder_id) {
-    try {
-      uri = await uploadFile(
-        script.lead_teacher_id,
-        script.drive_folder_id,
-        `clip_${questionId}_${script.id}.png`,
-        await storage.read(uri),
-        'image/png',
-      );
-    } catch (err) {
-      console.error('[drive] Clip upload failed:', (err as Error).message);
-    }
+    uri = await moveToDrive(script.lead_teacher_id, script.drive_folder_id, `clip_${questionId}_${script.id}.png`, uri, 'image/png');
   }
   return { uri };
 }

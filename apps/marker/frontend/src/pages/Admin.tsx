@@ -7,9 +7,9 @@ import type { AuditEntry, OverviewExam } from '@marker/shared-types';
 
 type Role = 'admin' | 'teacher';
 type UserRole = Role | 'student';
-type Tab = 'staff' | 'overview' | 'activity';
+type Tab = 'staff' | 'overview' | 'activity' | 'storage';
 
-const TABS: [Tab, string][] = [['staff', 'Staff'], ['overview', 'Marking overview'], ['activity', 'Activity']];
+const TABS: [Tab, string][] = [['staff', 'Staff'], ['overview', 'Marking overview'], ['activity', 'Activity'], ['storage', 'Storage']];
 
 export function Admin() {
   const meQ = useQuery({ queryKey: ['auth', 'me'], queryFn: () => api.me(), retry: false });
@@ -44,6 +44,7 @@ export function Admin() {
         ))}
       </div>
       {tab === 'staff' && <StaffTab myId={me.id} />}
+      {tab === 'storage' && <StorageTab />}
       {tab === 'overview' && <OverviewTab />}
       {tab === 'activity' && <ActivityTab />}
     </div>
@@ -303,6 +304,7 @@ function describe(e: AuditEntry): string {
     case 'invite.created': return `${who} invited ${e.target_id} as ${m.role}`;
     case 'invite.revoked': return `${who} revoked the invite for ${e.target_id}`;
     case 'question.updated': return `${who} edited question ${m.question_number}`;
+    case 'storage.delete_clip_copies': return `${who} deleted ${m.deleted} leftover clip cop${m.deleted === 1 ? 'y' : 'ies'} from the storage bucket`;
     case 'question.deleted': return `${who} deleted question ${m.question_number}`;
     default: return `${who}: ${e.action}`;
   }
@@ -339,6 +341,39 @@ function ActivityTab() {
           </Button>
         </div>
       )}
+    </Card>
+  );
+}
+
+// ── Storage ───────────────────────────────────────────────────────────────────
+// Clips of exams stored in Drive used to leave a temporary copy in the storage bucket. New clips no longer do; this finds
+// and removes the ones that were left behind. The Drive files are never touched.
+function StorageTab() {
+  const check = useMutation({ mutationFn: () => api.admin.clipCopies(true) });
+  const tidy = useMutation({ mutationFn: () => api.admin.clipCopies(false), onSuccess: () => check.reset() });
+  const found = check.data?.data.found;
+  return (
+    <Card className="max-w-2xl space-y-3 p-4">
+      <h2 className="font-medium text-slate-800">Leftover clip copies</h2>
+      <p className="text-sm text-slate-600">
+        Exams stored in Google Drive keep their student work in the lead teacher's Drive. Earlier versions also left a temporary copy of each clip
+        in the app's storage bucket. This finds those copies and removes them. The files in Drive are not touched.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button disabled={check.isPending || tidy.isPending} onClick={() => check.mutate()}>{check.isPending ? 'Checking…' : 'Check'}</Button>
+        {found !== undefined && found > 0 && (
+          <Button variant="danger" disabled={tidy.isPending} onClick={() => {
+            if (window.confirm(`Delete ${found} leftover clip cop${found === 1 ? 'y' : 'ies'} from the storage bucket? The Drive files are kept.`)) tidy.mutate();
+          }}>
+            {tidy.isPending ? 'Deleting…' : `Delete ${found} cop${found === 1 ? 'y' : 'ies'}`}
+          </Button>
+        )}
+      </div>
+      {check.data && <p role="status" className="text-sm text-slate-600">
+        Checked {check.data.data.checked} Drive clip{check.data.data.checked === 1 ? '' : 's'}: {check.data.data.found === 0 ? 'no leftover copies.' : `${check.data.data.found} leftover cop${check.data.data.found === 1 ? 'y' : 'ies'} found.`}
+      </p>}
+      {tidy.data && <p role="status" className="text-sm text-green-700">Deleted {tidy.data.data.deleted} cop{tidy.data.data.deleted === 1 ? 'y' : 'ies'}.</p>}
+      {(check.error || tidy.error) && <p role="alert" className="text-sm text-red-700">{((check.error || tidy.error) as Error).message}</p>}
     </Card>
   );
 }
