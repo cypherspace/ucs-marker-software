@@ -207,6 +207,8 @@ export interface QueueClip {
   prev_id: string | null;
   next_id: string | null;
   next_unmarked_id: string | null;
+  // Image URLs of the clips likely to be opened next, to fetch ahead of time
+  preload_urls?: string[];
   state: ClipState;
   // This teacher's own saved ticks and mark for the clip, if any
   my_mark: { marks_awarded: number | null; annotation_data: AnnotationData | null; status: MarkStatus } | null;

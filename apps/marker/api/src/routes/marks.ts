@@ -35,11 +35,15 @@ const SaveMarkSchema = z.object({
 
 type ClipState = 'marked' | 'draft' | 'unmarked';
 
+// The URL the marking page loads a clip image from. The version changes when the pages are re-selected, so a cached image is never stale.
+const clipImageUrl = (id: string, reclippedAt: string | Date | null): string =>
+  `/api/v1/clips/${id}/image?v=${reclippedAt ? new Date(reclippedAt).getTime() : 0}`;
+
 // This teacher's clips for a question in a stable order (by script number, which markers
 // only ever see as a position), with how far along each one is for them.
-async function clipList(questionId: string, teacherId: string): Promise<{ id: string; state: ClipState }[]> {
+async function clipList(questionId: string, teacherId: string): Promise<{ id: string; state: ClipState; reclipped_at: string | null }[]> {
   const result = await db.raw(
-    `SELECT sc.id,
+    `SELECT sc.id, sc.reclipped_at,
             CASE
               WHEN EXISTS (SELECT 1 FROM script_marks sm WHERE sm.clip_id = sc.id AND sm.marker_id = ?
                               AND sm.mark_source = 'human' AND sm.status <> 'pending') THEN 'marked'
@@ -53,7 +57,7 @@ async function clipList(questionId: string, teacherId: string): Promise<{ id: st
       ORDER BY ss.student_number, sc.id`,
     [teacherId, teacherId, questionId],
   );
-  return result.rows as { id: string; state: ClipState }[];
+  return result.rows as { id: string; state: ClipState; reclipped_at: string | null }[];
 }
 
 // The clips for a question, for the jump menu on the marking page
@@ -61,7 +65,7 @@ router.get('/exams/:examId/questions/:questionId/clips', requireAuth, async (req
   try {
     const access = await requireQuestionAccess(req, res, req.params.questionId, { examId: req.params.examId });
     if (!access) return;
-    res.json({ data: await clipList(req.params.questionId, req.user!.sub) });
+    res.json({ data: (await clipList(req.params.questionId, req.user!.sub)).map(({ id, state }) => ({ id, state })) });
   } catch (err) {
     next(err);
   }
@@ -110,8 +114,7 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
     const question = await db('exam_questions').where({ id: req.params.questionId }).first();
 
     // The clip image is served by this API (same origin), so the canvas can read it whatever the storage.
-    const version = clip.reclipped_at ? new Date(clip.reclipped_at).getTime() : 0;
-    const clipUrl = `/api/v1/clips/${clip.id}/image?v=${version}`;
+    const clipUrl = clipImageUrl(clip.id, clip.reclipped_at);
 
     // Mark-scheme clip URL, if one was produced during clipping
     let msUrl: string | null = null;
@@ -149,6 +152,9 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
         prev_id: list[index - 1]?.id ?? null,
         next_id: list[index + 1]?.id ?? null,
         next_unmarked_id: nextUnmarked?.id ?? null,
+        // Where the clips this teacher is most likely to open next are, so the browser can fetch their images ahead of time
+        preload_urls: [...new Set([nextUnmarked, list[index + 1], list[index - 1]].filter((c): c is NonNullable<typeof c> => Boolean(c)))]
+          .map((c) => clipImageUrl(c.id, c.reclipped_at)),
         state: list[index].state,
         my_mark: mine
           ? { marks_awarded: mine.marks_awarded, annotation_data: mine.annotation_data, status: mine.status }

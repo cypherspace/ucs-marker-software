@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { useBackTarget } from '../lib/nav';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
 import { AnnotationCanvas } from '../components/AnnotationCanvas';
 import { AnnotationToolbar, COLORS, TOOLS, type Tool } from '../components/AnnotationToolbar';
@@ -17,9 +17,13 @@ import { usePersistedState } from '../hooks/usePersistedState';
 import { applyDigit, isMarkDigitKey, isSaveEnterKey, type DigitBuffer } from '../lib/markKeys';
 import type { Annotation, AnnotationData, QueueClip } from '@marker/shared-types';
 import { questionLabel } from '../lib/questionLabel';
+import { clearImageCache, preloadImage } from '../lib/clipImageCache';
 
 // Loads one clip (the one in the URL, else the first this teacher hasn't finished).
-// The panel below is keyed by clip id, so ticks and typed marks can never carry over to another script.
+// Moving to another script keeps the screen as it is (header, tools, mark scheme) and swaps the script in when it is
+// ready: the old script stays up, inactive, until the next one's data has arrived, and its image is usually already
+// fetched. MarkingPanel resets everything that belongs to one script (ticks, typed mark, converted view) when the clip
+// changes, so nothing carries over to another script.
 export function MarkingInterface() {
   const { examId, questionId, clipId } = useParams<{ examId: string; questionId: string; clipId?: string }>();
   const navigate = useNavigate();
@@ -33,7 +37,12 @@ export function MarkingInterface() {
     queryFn: () => api.getNextClip(examId!, questionId!, clipId),
     refetchOnWindowFocus: false,
     gcTime: 0,
+    // Keep showing the current script while the next one's data loads, instead of replacing the screen with "Loading…"
+    placeholderData: keepPreviousData,
   });
+
+  // Pictures held for quick moves between scripts are dropped when leaving the marking page (a re-clip elsewhere is then seen)
+  useEffect(() => clearImageCache, []);
 
   if (clipQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
@@ -63,8 +72,8 @@ export function MarkingInterface() {
 
   return (
     <MarkingPanel
-      key={clip.id}
       clip={clip}
+      stale={clipQ.isPlaceholderData}
       examId={examId!}
       questionId={questionId!}
       refetch={() => { void clipQ.refetch(); }}
@@ -74,8 +83,10 @@ export function MarkingInterface() {
 
 const snapshot = (a: AnnotationData, typed: string | null) => JSON.stringify([a.annotations, typed]);
 
-function MarkingPanel({ clip, examId, questionId, refetch }: {
+function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
   clip: QueueClip; examId: string; questionId: string; refetch: () => void;
+  // The next script is still loading: this one is shown but cannot be acted on
+  stale: boolean;
 }) {
   const navigate = useNavigate();
   const loc = useLocation();
@@ -106,6 +117,20 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   // The converted-handwriting page (a saved picture of the transcription), once made
   const [convertedUrl, setConvertedUrl] = useState<string | null>(clip.converted_url);
   const [view, setView] = useState<'script' | 'converted'>('script');
+
+  // This panel stays mounted from script to script. When the script changes, everything that belongs to one script
+  // starts again from what is saved for the new one (so ticks, a typed mark or the converted view never carry over).
+  const [shownClipId, setShownClipId] = useState(clip.id);
+  if (shownClipId !== clip.id) {
+    setShownClipId(clip.id);
+    setAnnotations(initialAnnotations);
+    setTyped(initialTyped);
+    setSaved(snapshot(initialAnnotations, initialTyped));
+    setShowPages(false);
+    setShowAi(false);
+    setConvertedUrl(clip.converted_url);
+    setView('script');
+  }
   const [tool, setTool] = usePersistedState<Tool>('marker.tool', 'mark_tick', (v): v is Tool => TOOLS.includes(v as Tool));
   const [color, setColor] = usePersistedState<string>('marker.color', COLORS[0], (v): v is string => COLORS.includes(v as string));
   const scriptZoom = useZoom('marker.zoom.script');
@@ -166,6 +191,21 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     )) convertMutation.mutate(true);
   }
 
+  useEffect(() => {
+    saveMutation.reset();
+    convertMutation.reset();
+    digits.current = { text: '', at: 0 };
+    setFlash(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip.id]);
+
+  // Fetch the pictures of the scripts likely to come next, once this one is on screen
+  useEffect(() => {
+    if (stale) return;
+    const timer = setTimeout(() => { for (const url of clip.preload_urls ?? []) void preloadImage(url).catch(() => {}); }, 300);
+    return () => clearTimeout(timer);
+  }, [clip.id, clip.preload_urls, stale]);
+
   const addAnnotation = useCallback(
     (a: Annotation) => setAnnotations((d) => ({ annotations: [...d.annotations, a] })), []);
   const removeAnnotation = useCallback(
@@ -183,7 +223,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
   const saveNext = useRef<() => void>(() => {});
   const [flash, setFlash] = useState(false);
   useEffect(() => {
-    if (showPages) return;
+    if (showPages || stale) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -211,7 +251,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     };
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('keydown', onKey); clearTimeout(timer); };
-  }, [tool, maxMarks, auto, typed, showPages, canSave, saveMutation.isPending]);
+  }, [tool, maxMarks, auto, typed, showPages, stale, canSave, saveMutation.isPending]);
 
   // Esc leaves the converted view
   useEffect(() => {
@@ -258,7 +298,7 @@ function MarkingPanel({ clip, examId, questionId, refetch }: {
     : '';
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" inert={stale} aria-busy={stale}>
       {/* Header bar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
         <button onClick={async () => { if (dirty) { try { await saveMutation.mutateAsync(true); } catch { return; } } navigate(backTarget.to, { state: backTarget.state }); }}
