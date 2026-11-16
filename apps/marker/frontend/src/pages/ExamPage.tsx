@@ -30,7 +30,7 @@ export function ExamPage() {
   const details =[exam.subject, exam.year_group, exam.exam_board, exam.exam_series].filter(Boolean).join(' · ');
 
   return (
-    <div className="max-w-4xl p-4 sm:p-6">
+    <div className="max-w-6xl p-4 sm:p-6">
       <PageHeader
         title={<span className="flex flex-wrap items-center gap-x-3 gap-y-1">{exam.name} <StatusPill status={exam.status} /></span>}
         crumbs={[{ label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' }, { label: exam.name }]}

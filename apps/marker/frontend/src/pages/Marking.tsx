@@ -265,11 +265,20 @@ export function ComparativeOverview() {
             {judging.map(({ exam, questions }) => (
               <Card key={exam.id} className="p-4">
                 <h3 className="mb-2 font-semibold text-slate-800">{exam.name}</h3>
-                <div className="flex flex-wrap gap-2">
-                  {questions.map((q) => (
-                    <LinkButton key={q.id} to={`/compare/${exam.id}/${q.id}`} variant="secondary">Question {questionLabel(q.question_number)}</LinkButton>
-                  ))}
-                </div>
+                <table className="w-full text-sm">
+                  <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr><th className="px-2 py-1.5">Question</th><th className="px-2 py-1.5">Marks</th><th className="px-2 py-1.5" /></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {questions.map((q) => (
+                      <tr key={q.id}>
+                        <td className="px-2 py-1.5 font-medium text-slate-800">Q{questionLabel(q.question_number)}</td>
+                        <td className="px-2 py-1.5 text-slate-500">ranked</td>
+                        <td className="px-2 py-1.5 text-right"><LinkButton to={`/compare/${exam.id}/${q.id}`} variant="secondary" className="!min-h-8 !px-3">Judge comparisons</LinkButton></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </Card>
             ))}
           </div>
@@ -282,13 +291,20 @@ export function ComparativeOverview() {
             {ranking.map(({ exam, questions }) => (
               <Card key={exam.id} className="p-4">
                 <h3 className="mb-2 font-semibold text-slate-800">{exam.name}</h3>
-                <div className="flex flex-wrap gap-2">
-                  {questions.map((q) => (
-                    <LinkButton key={q.question_id} to={`/compare/${exam.id}/${q.question_id}/ranking`} variant="secondary">
-                      Question {questionLabel(q.question_number)} ranking
-                    </LinkButton>
-                  ))}
-                </div>
+                <table className="w-full text-sm">
+                  <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr><th className="px-2 py-1.5">Question</th><th className="px-2 py-1.5">Teachers</th><th className="px-2 py-1.5" /></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {questions.map((q) => (
+                      <tr key={q.question_id}>
+                        <td className="px-2 py-1.5 font-medium text-slate-800">Q{questionLabel(q.question_number)}</td>
+                        <td className="px-2 py-1.5 text-xs text-slate-500">{q.teachers.length === 0 ? 'nobody assigned' : q.teachers.map((t) => t.email.split('@')[0]).join(', ')}</td>
+                        <td className="px-2 py-1.5 text-right"><LinkButton to={`/compare/${exam.id}/${q.question_id}/ranking`} variant="secondary" className="!min-h-8 !px-3">See ranking</LinkButton></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </Card>
             ))}
           </div>

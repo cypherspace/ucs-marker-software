@@ -5,6 +5,7 @@ import { api } from '../api';
 import { AnnotatedExport } from '../components/AnnotatedExport';
 import { Button, Card } from '../components/ui';
 import { saveBlob } from '../lib/saveFile';
+import { HEAD, TableBox } from '../components/DataTable';
 import type { Exam, MarkCombine } from '@marker/shared-types';
 import { COMBINES, COMBINE_LABELS } from '../lib/markCombine';
 import { questionLabel } from '../lib/questionLabel';
@@ -35,6 +36,10 @@ export function ExamResults() {
   const [msg, setMsg] = useState<string | null>(null);
   const [pdfNames, setPdfNames] = useState(false);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+  // Click a column heading to sort by it; click again to reverse
+  const [sortKey, setSortKey] = useState<string>('student');
+  const [sortDesc, setSortDesc] = useState(false);
+  const sortBy = (key: string) => { if (key === sortKey) setSortDesc((d) => !d); else { setSortKey(key); setSortDesc(key !== 'student'); } };
 
   async function downloadPdf(scriptId: string) {
     setPdfBusy(scriptId); setMsg(null);
@@ -66,6 +71,24 @@ export function ExamResults() {
   const r = resultsQ.data.data;
   const statsFor = new Map(r.stats.map((s) => [s.question_id, s]));
   const showClassColumn = r.classes.some((c) => c.name !== null);
+  const valueOf = (row: (typeof r.rows)[number]): number | string => {
+    if (sortKey === 'student') return row.student_number;
+    if (sortKey === 'total') return row.possible > 0 ? row.total / row.possible : -1;
+    return row.cells[sortKey]?.marks ?? -1;
+  };
+  const sortedRows = [...r.rows].sort((a, b) => {
+    const x = valueOf(a), y = valueOf(b);
+    const c = typeof x === 'string' ? x.localeCompare(String(y), undefined, { numeric: true }) : Number(x) - Number(y);
+    return sortDesc ? -c : c;
+  });
+  const maxOf = new Map(r.questions.map((q) => [q.id, q.max_marks]));
+  // A soft tint by how much of the marks were earned, so strong and weak answers stand out down a column
+  const tint = (marks: number | null, max: number | undefined) => {
+    if (marks === null || !max) return undefined;
+    const f = Math.max(0, Math.min(1, marks / max));
+    return `hsl(${Math.round(f * 120)} 65% ${f === 1 ? 94 : 92}%)`;
+  };
+  const sortMark = (key: string) => (sortKey === key ? (sortDesc ? ' ↓' : ' ↑') : '');
 
   return (
     <div>
@@ -168,54 +191,62 @@ export function ExamResults() {
             </table>
           </Card>
 
-          <Card className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <caption className="border-b border-slate-200 px-4 py-3 text-left font-medium text-slate-800">
-                Marks by script <span className="font-normal text-slate-500">({r.rows.length})</span>
-              </caption>
-              <thead className="text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-4 py-2">Student</th>
-                  {showClassColumn && <th className="px-4 py-2">Class</th>}
-                  {r.questions.map((q) => <th key={q.id} className="px-3 py-2 text-center">Q{questionLabel(q.question_number)}</th>)}
-                  <th className="px-4 py-2 text-center">Total</th>
-                  {isLead && <th className="px-4 py-2"><span className="sr-only">Annotated PDF</span></th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {r.rows.map((row) => (
-                  <tr key={row.script_id}>
-                    <td className="px-4 py-2 font-medium text-slate-800">{row.student_number}</td>
-                    {showClassColumn && <td className="px-4 py-2 text-slate-600">{row.class_group ?? '–'}</td>}
-                    {r.questions.map((q) => {
-                      const cell = row.cells[q.id];
-                      return (
-                        <td key={q.id} className="px-3 py-2 text-center tabular-nums">
-                          {!cell ? <span className="text-slate-300" title="Not one of your questions">·</span>
-                            : cell.marks === null ? <span className="text-slate-400">–</span>
-                            : cell.source === 'ai' ? <span className="italic text-violet-700" title="Marked by the AI only">{cell.marks}</span>
-                            : cell.marks}
-                        </td>
-                      );
-                    })}
-                    <td className="px-4 py-2 text-center font-medium tabular-nums">{row.possible > 0 ? `${row.total} / ${row.possible}` : '–'}</td>
-                    {isLead && (
-                      <td className="px-4 py-2 text-right">
-                        <button
-                          type="button"
-                          disabled={pdfBusy !== null}
-                          onClick={() => void downloadPdf(row.script_id)}
-                          title="Download this script as a PDF with the marking drawn on"
-                          className="rounded px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
-                        >
-                          {pdfBusy === row.script_id ? 'Making…' : 'PDF'}
-                        </button>
-                      </td>
-                    )}
+          <Card>
+            <div className="border-b border-slate-200 px-4 py-3 font-medium text-slate-800">
+              Marks by script <span className="font-normal text-slate-500">({r.rows.length})</span>
+              <span className="ml-3 text-xs font-normal text-slate-500">Click a heading to sort. Shading shows how much of the marks were earned.</span>
+            </div>
+            <TableBox maxHeight="70vh" className="rounded-none border-0">
+              <table className="w-full min-w-max text-left text-sm">
+                <thead className={`${HEAD} text-xs uppercase tracking-wide text-slate-500`}>
+                  <tr>
+                    <th className="sticky left-0 z-20 bg-slate-50 px-4 py-2"><button className="font-medium uppercase hover:text-slate-800" onClick={() => sortBy('student')}>Student{sortMark('student')}</button></th>
+                    {showClassColumn && <th className="px-4 py-2">Class</th>}
+                    {r.questions.map((q) => (
+                      <th key={q.id} className="px-3 py-2 text-center" title={`Out of ${q.max_marks}`}>
+                        <button className="font-medium uppercase hover:text-slate-800" onClick={() => sortBy(q.id)}>Q{questionLabel(q.question_number)}{sortMark(q.id)}</button>
+                        <div className="text-[10px] font-normal normal-case text-slate-400">/{q.max_marks}</div>
+                      </th>
+                    ))}
+                    <th className="px-4 py-2 text-center"><button className="font-medium uppercase hover:text-slate-800" onClick={() => sortBy('total')}>Total{sortMark('total')}</button></th>
+                    {isLead && <th className="px-4 py-2"><span className="sr-only">Annotated PDF</span></th>}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {sortedRows.map((row) => (
+                    <tr key={row.script_id}>
+                      <td className="sticky left-0 bg-white px-4 py-2 font-medium text-slate-800">{row.student_number}</td>
+                      {showClassColumn && <td className="px-4 py-2 text-slate-600">{row.class_group ?? '–'}</td>}
+                      {r.questions.map((q) => {
+                        const cell = row.cells[q.id];
+                        return (
+                          <td key={q.id} className="px-3 py-2 text-center tabular-nums" style={{ backgroundColor: cell && cell.source !== 'ai' ? tint(cell.marks, maxOf.get(q.id)) : undefined }}>
+                            {!cell ? <span className="text-slate-300" title="Not one of your questions">·</span>
+                              : cell.marks === null ? <span className="text-slate-400">–</span>
+                              : cell.source === 'ai' ? <span className="italic text-violet-700" title="Marked by the AI only">{cell.marks}</span>
+                              : cell.marks}
+                          </td>
+                        );
+                      })}
+                      <td className="px-4 py-2 text-center font-medium tabular-nums">{row.possible > 0 ? `${row.total} / ${row.possible}` : '–'}</td>
+                      {isLead && (
+                        <td className="px-4 py-2 text-right">
+                          <button
+                            type="button"
+                            disabled={pdfBusy !== null}
+                            onClick={() => void downloadPdf(row.script_id)}
+                            title="Download this script as a PDF with the marking drawn on"
+                            className="rounded px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
+                          >
+                            {pdfBusy === row.script_id ? 'Making…' : 'PDF'}
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableBox>
             <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
               A teacher's mark is shown where there is one; <span className="italic text-violet-700">italic</span> marks are the AI's, where no teacher has marked yet.
               Totals add up the answers marked so far.
