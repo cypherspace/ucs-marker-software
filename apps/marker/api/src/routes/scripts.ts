@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { storage } from '../services/storage.js';
 import { uploadFile, createExamFolder } from '../services/drive.js';
+import { moveToDrive } from '../services/driveCopy.js';
 import { scriptPdfSource } from '../services/scriptSource.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
@@ -279,14 +280,9 @@ async function clipOneScript(
   // Move the clip images into the lead teacher's Drive when the exam stores files there
   if (exam.use_drive_storage && exam.drive_folder_id) {
     await Promise.all(result.clips.map(async (c) => {
-      try {
-        c.clip_image_url = await uploadFile(
-          exam.lead_teacher_id, exam.drive_folder_id!, `clip_${c.question_id}_${c.script_id}.png`,
-          await storage.read(c.clip_image_url), 'image/png',
-        );
-      } catch (err) {
-        console.error('[drive] Clip upload failed:', (err as Error).message);
-      }
+      c.clip_image_url = await moveToDrive(
+        exam.lead_teacher_id, exam.drive_folder_id!, `clip_${c.question_id}_${c.script_id}.png`, c.clip_image_url, 'image/png',
+      );
     }));
   }
 

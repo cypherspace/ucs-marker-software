@@ -1,4 +1,4 @@
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { Storage as GcsClient, type Bucket } from '@google-cloud/storage';
 import { config } from '../config.js';
@@ -8,6 +8,10 @@ export interface Storage {
   read(uri: string): Promise<Buffer>;
   /** Remove a stored file. A file that is already gone is not an error. */
   delete(uri: string): Promise<void>;
+  /** Whether a stored file is there */
+  exists(uri: string): Promise<boolean>;
+  /** The URI a file written with this key has (what `write` returns), without writing anything */
+  uriForKey(key: string): string;
   publicUrl(uri: string, ttlSeconds?: number): Promise<string>;
   rawUri(uri: string): string;
 }
@@ -28,6 +32,14 @@ class LocalStorage implements Storage {
 
   async delete(uri: string): Promise<void> {
     try { await unlink(uri); } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; }
+  }
+
+  async exists(uri: string): Promise<boolean> {
+    try { await access(uri); return true; } catch { return false; }
+  }
+
+  uriForKey(key: string): string {
+    return resolve(this.root, key);
   }
 
   async publicUrl(uri: string): Promise<string> {
@@ -67,6 +79,15 @@ class GcsStorage implements Storage {
 
   async delete(uri: string): Promise<void> {
     await this.bucket.file(this.keyFromUri(uri)).delete({ ignoreNotFound: true });
+  }
+
+  async exists(uri: string): Promise<boolean> {
+    const [found] = await this.bucket.file(this.keyFromUri(uri)).exists();
+    return found;
+  }
+
+  uriForKey(key: string): string {
+    return `gs://${this.bucket.name}/${key}`;
   }
 
   async publicUrl(uri: string, ttlSeconds = 3600): Promise<string> {

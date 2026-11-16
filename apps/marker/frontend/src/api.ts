@@ -388,5 +388,9 @@ export const api = {
         `${ADM}/audit?limit=50${before ? `&before=${encodeURIComponent(before)}` : ''}`,
       ),
     overview: () => http<ApiSuccess<OverviewExam[]>>(`${ADM}/overview`),
+    clipCopies: (dryRun: boolean) =>
+      http<ApiSuccess<{ dry_run: boolean; checked: number; found: number; deleted: number }>>(`${ADM}/maintenance/clip-copies`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dry_run: dryRun }),
+      }),
   },
 };

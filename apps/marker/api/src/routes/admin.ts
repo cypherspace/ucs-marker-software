@@ -5,6 +5,8 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { recordAudit } from '../services/audit.js';
+import { clipTempKey } from '../services/driveCopy.js';
+import { storage } from '../services/storage.js';
 
 const router = Router();
 router.use(requireAuth, requireRole(['admin']));
@@ -214,6 +216,31 @@ router.get('/audit', async (req, res, next) => {
 });
 
 // ── Marking overview ────────────────────────────────────────────────────────
+// Clips of Drive exams used to leave their temporary copy in the storage bucket. This finds those copies (a clip whose
+// real file is in Drive, with a leftover at the extractor's key) and, unless dry_run is true, deletes them. The Drive
+// file is never touched, and a clip whose live file is in the bucket is never listed, so nothing in use is removed.
+router.post('/maintenance/clip-copies', async (req, res, next) => {
+  try {
+    const { dry_run } = z.object({ dry_run: z.boolean().default(true) }).parse(req.body ?? {});
+    const clips = await db('script_clips').where('clip_image_url', 'like', 'drive://%')
+      .select<{ question_id: string; script_id: string }[]>('question_id', 'script_id');
+    let found = 0;
+    let deleted = 0;
+    for (let i = 0; i < clips.length; i += 25) {
+      await Promise.all(clips.slice(i, i + 25).map(async (c) => {
+        const uri = storage.uriForKey(clipTempKey(c.question_id, c.script_id));
+        if (!(await storage.exists(uri))) return;
+        found++;
+        if (!dry_run) { await storage.delete(uri); deleted++; }
+      }));
+    }
+    if (!dry_run) await recordAudit(req, 'storage.delete_clip_copies', null, null, { checked: clips.length, deleted });
+    res.json({ data: { dry_run, checked: clips.length, found, deleted } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/overview', async (_req, res, next) => {
   try {
     const exams = (await db.raw(
