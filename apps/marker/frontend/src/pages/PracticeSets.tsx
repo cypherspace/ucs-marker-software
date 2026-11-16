@@ -4,6 +4,7 @@ import { useNavigate, useOutletContext } from 'react-router-dom';
 import { api } from '../api';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { Button, Card, LinkButton } from '../components/ui';
+import { GroupTick, HEAD, TableBox, TH } from '../components/DataTable';
 import { questionLabel } from '../lib/questionLabel';
 import type { Exam } from '@marker/shared-types';
 
@@ -15,6 +16,9 @@ export function PracticeSets() {
   const qc = useQueryClient();
   const setsQ = useQuery({ queryKey: ['practice-sets', exam.id], queryFn: () => api.listPracticeSets(exam.id) });
   const questionsQ = useQuery({ queryKey: ['questions', exam.id], queryFn: () => api.listQuestions(exam.id) });
+  // How many clips teachers have marked on each question, to show how many a set could use
+  const progressQ = useQuery({ queryKey: ['progress', exam.id], queryFn: () => api.getProgress(exam.id) });
+  const progressOf = new Map((progressQ.data?.data.questions ?? []).map((p) => [p.question_id, p]));
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -50,17 +54,55 @@ export function PracticeSets() {
           </div>
           <fieldset>
             <legend className="text-sm font-medium text-slate-700">Questions to include</legend>
-            <div className="mt-1 flex flex-wrap gap-2">
-              {questions.map((q) => (
-                <label key={q.id} className="flex items-center gap-1.5 rounded border border-slate-200 px-2 py-1 text-sm">
-                  <input type="checkbox" checked={picked.has(q.id)} onChange={(e) => {
-                    const n = new Set(picked); if (e.target.checked) n.add(q.id); else n.delete(q.id); setPicked(n);
-                  }} />
-                  {questionLabel(q.question_number)} <span className="text-xs text-slate-400">/{q.max_marks}</span>
-                </label>
-              ))}
-              {questions.length === 0 && <span className="text-sm text-slate-500">No questions marked with marks yet.</span>}
-            </div>
+            <div className="mb-1 text-xs text-slate-500">{picked.size} of {questions.length} ticked</div>
+            {questions.length === 0 ? (
+              <span className="text-sm text-slate-500">No questions marked with marks yet.</span>
+            ) : (
+              <TableBox maxHeight="24rem">
+                <table className="w-full text-sm">
+                  <thead className={HEAD}>
+                    <tr>
+                      <th className="w-10 px-3 py-2">
+                        <GroupTick
+                          label="Tick or clear every question"
+                          ticked={picked.size}
+                          total={questions.length}
+                          onChange={(on) => setPicked(on ? new Set(questions.map((q) => q.id)) : new Set())}
+                        />
+                      </th>
+                      <th className={TH}>Question</th>
+                      <th className={TH}>Marks</th>
+                      <th className={TH} title="Clips with a teacher's mark">Teacher-marked</th>
+                      <th className={TH} title="Clips a set could use with the options below">Available</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {questions.map((q) => {
+                      const on = picked.has(q.id);
+                      const p = progressOf.get(q.id);
+                      const marked = p?.marked_clips ?? 0;
+                      const available = settled ? Math.max(0, marked - (p?.conflict_clips ?? 0)) : marked;
+                      return (
+                        <tr key={q.id} className={on ? 'bg-indigo-50/60' : ''}>
+                          <td className="px-3 py-1">
+                            <input id={`ps-q-${q.id}`} type="checkbox" checked={on} onChange={(e) => {
+                              const n = new Set(picked); if (e.target.checked) n.add(q.id); else n.delete(q.id); setPicked(n);
+                            }} />
+                          </td>
+                          <td className="px-2 py-1 font-medium text-slate-800"><label htmlFor={`ps-q-${q.id}`} className="block cursor-pointer">Q{questionLabel(q.question_number)}</label></td>
+                          <td className="px-2 py-1 tabular-nums text-slate-600">{q.max_marks}</td>
+                          <td className="px-2 py-1 tabular-nums text-slate-600">{progressQ.isLoading ? '…' : marked}</td>
+                          <td className={`px-2 py-1 tabular-nums ${progressQ.isLoading ? 'text-slate-400' : available === 0 ? 'font-medium text-amber-700' : available < per ? 'text-amber-700' : 'text-slate-700'}`}
+                              title={available < per && !progressQ.isLoading ? `Fewer than the ${per} clips asked for` : undefined}>
+                            {progressQ.isLoading ? '…' : available}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </TableBox>
+            )}
           </fieldset>
           <div className="flex flex-wrap items-end gap-6">
             <div>

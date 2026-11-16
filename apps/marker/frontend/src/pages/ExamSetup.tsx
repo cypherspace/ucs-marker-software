@@ -14,6 +14,7 @@ import { useUploadQueue } from '../hooks/useUploadQueue';
 import { QuestionLabelInput } from '../components/QuestionLabelInput';
 import { questionLabel } from '../lib/questionLabel';
 import { AssignTeachers } from '../components/AssignTeachers';
+import { HEAD, TableBox, TH } from '../components/DataTable';
 
 type SetupTab = 'scripts' | 'questions' | 'assign';
 
@@ -398,117 +399,133 @@ export function ExamSetup() {
           )}
 
           {questions.length > 0 && (
-            <div className="rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
-              {questions.map((q: ExamQuestion) => {
-                const isEditing = editingQId === q.id;
-                const clips = progressByQuestion.get(q.id)?.total_clips ?? 0;
-                return (
-                  <div key={q.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                    {isEditing ? (
-                      <>
-                        <QuestionLabelInput key={q.id} value={editNumber} onChange={setEditNumber} />
-                        <label className="flex items-center gap-1 text-sm text-slate-500">
-                          <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            value={editMarks}
-                            onChange={(e) => setEditMarks(e.target.value)}
-                            aria-label="Maximum marks"
-                            className="w-20 rounded border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                          />
-                          marks
-                        </label>
-                        <div className="ml-auto flex items-center gap-2 text-xs">
-                          <button
-                            onClick={() => updateQuestionMutation.mutate(q)}
-                            disabled={!editNumber.trim() || editMarks === '' || updateQuestionMutation.isPending}
-                            className="rounded bg-indigo-600 px-3 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+            <TableBox maxHeight="40rem">
+              <table className="w-full min-w-max text-sm">
+                <thead className={HEAD}>
+                  <tr>
+                    <th className={TH}>Question</th>
+                    <th className={TH}>Marks</th>
+                    <th className={TH}>Clips</th>
+                    <th className={TH}>Answer regions</th>
+                    <th className={TH}>Mark scheme</th>
+                    <th className={TH} title="Rank the scripts by comparing pairs instead of giving marks. Useful for essay questions.">Rank by comparison</th>
+                    <th className={`${TH} text-right`}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {questions.map((q: ExamQuestion) => {
+                    const isEditing = editingQId === q.id;
+                    const clips = progressByQuestion.get(q.id)?.total_clips ?? 0;
+                    if (isEditing) {
+                      return (
+                        <tr key={q.id} className="bg-indigo-50/50">
+                          <td className="px-2 py-2" colSpan={2}>
+                            <div className="flex flex-wrap items-center gap-3">
+                              <QuestionLabelInput key={q.id} value={editNumber} onChange={setEditNumber} />
+                              <label className="flex items-center gap-1 text-sm text-slate-500">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={editMarks}
+                                  onChange={(e) => setEditMarks(e.target.value)}
+                                  aria-label="Maximum marks"
+                                  className="w-20 rounded border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+                                />
+                                marks
+                              </label>
+                            </div>
+                          </td>
+                          <td colSpan={4} />
+                          <td className="px-2 py-2">
+                            <div className="flex items-center justify-end gap-2 text-xs">
+                              <button
+                                onClick={() => updateQuestionMutation.mutate(q)}
+                                disabled={!editNumber.trim() || editMarks === '' || updateQuestionMutation.isPending}
+                                className="rounded bg-indigo-600 px-3 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => { setEditingQId(null); setQuestionError(null); }}
+                                className="rounded border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+                    const coords: { page: number }[] = q.clip_coordinates ?? [];
+                    const pages = [...new Set(coords.map((r) => r.page))].sort((a, b) => a - b);
+                    const hasMsRegion = (q.ms_clip_coordinates ?? []).length > 0;
+                    return (
+                      <tr key={q.id}>
+                        <td className="whitespace-nowrap px-2 py-1.5 font-medium text-slate-800">Q{questionLabel(q.question_number)}</td>
+                        <td className="px-2 py-1.5 tabular-nums text-slate-600">{q.max_marks}</td>
+                        <td className="px-2 py-1.5 tabular-nums text-slate-500">{clips || <span className="text-slate-300">–</span>}</td>
+                        <td className="whitespace-nowrap px-2 py-1.5 text-xs">
+                          {coords.length === 0
+                            ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">No regions yet</span>
+                            : <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">{coords.length} region{coords.length !== 1 ? 's' : ''} · p.{pages.join(', ')}</span>}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-1.5 text-xs">
+                          <span
+                            className={`rounded-full px-2 py-0.5 ${hasMsRegion ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}
+                            title="Where this question's answer is on the mark scheme"
                           >
-                            Save
-                          </button>
-                          <button
-                            onClick={() => { setEditingQId(null); setQuestionError(null); }}
-                            className="rounded border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <span className="min-w-12 font-medium text-slate-700">Q{questionLabel(q.question_number)}</span>
-                        <span className="text-sm text-slate-500">{q.max_marks} marks</span>
-                        {clips > 0 && <span className="text-xs text-slate-400">{clips} clip{clips === 1 ? '' : 's'}</span>}
-                        <label
-                          className="flex items-center gap-1.5 text-xs text-slate-600"
-                          title="Rank the scripts by comparing pairs instead of giving marks. Useful for essay questions."
-                        >
+                            {hasMsRegion ? '✓ region' : 'No region'}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5">
                           <input
                             type="checkbox"
+                            aria-label={`Rank Q${questionLabel(q.question_number)} by comparison`}
                             checked={q.marking_mode === 'comparative'}
                             disabled={modeMutation.isPending}
                             onChange={(e) => modeMutation.mutate({ q, comparative: e.target.checked })}
                           />
-                          Rank by comparison
-                        </label>
-                        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
-                          {(() => {
-                            const coords: { page: number }[] = q.clip_coordinates ?? [];
-                            if (coords.length === 0) {
-                              return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">No regions yet</span>;
-                            }
-                            const pages = [...new Set(coords.map((r) => r.page))].sort((a, b) => a - b);
-                            return (
-                              <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">
-                                {coords.length} region{coords.length !== 1 ? 's' : ''} · p.{pages.join(', ')}
-                              </span>
-                            );
-                          })()}
-                          <span
-                            className={`rounded-full px-2 py-0.5 ${
-                              (q.ms_clip_coordinates ?? []).length > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
-                            }`}
-                            title="Where this question's answer is on the mark scheme"
-                          >
-                            {(q.ms_clip_coordinates ?? []).length > 0 ? 'Mark scheme ✓' : 'No mark scheme region'}
-                          </span>
-                          <button
-                            onClick={() => { setNotice(null); setClipper({ mode: 'edit', question: q }); }}
-                            disabled={scripts.length === 0}
-                            title={scripts.length === 0 ? 'Upload a script first to draw on' : 'Draw or edit clip regions'}
-                            className="rounded bg-indigo-600 px-2.5 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
-                          >
-                            {(q.clip_coordinates ?? []).length > 0 ? 'Edit regions' : 'Draw regions'}
-                          </button>
-                          {exam?.mark_scheme_pdf_url && (
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <div className="flex items-center justify-end gap-1.5 whitespace-nowrap text-xs">
                             <button
-                              onClick={() => { setNotice(null); setClipper({ mode: 'mark-scheme', question: q }); }}
-                              title="Draw this question's region on the mark scheme"
+                              onClick={() => { setNotice(null); setClipper({ mode: 'edit', question: q }); }}
+                              disabled={scripts.length === 0}
+                              title={scripts.length === 0 ? 'Upload a script first to draw on' : 'Draw or edit clip regions'}
+                              className="rounded bg-indigo-600 px-2.5 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                            >
+                              {coords.length > 0 ? 'Edit regions' : 'Draw regions'}
+                            </button>
+                            {exam?.mark_scheme_pdf_url && (
+                              <button
+                                onClick={() => { setNotice(null); setClipper({ mode: 'mark-scheme', question: q }); }}
+                                title="Draw this question's region on the mark scheme"
+                                className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Mark scheme
+                              </button>
+                            )}
+                            <button
+                              onClick={() => startEditing(q)}
                               className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
                             >
-                              Mark scheme
+                              Edit
                             </button>
-                          )}
-                          <button
-                            onClick={() => startEditing(q)}
-                            className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => deleteQuestion(q)}
-                            className="rounded border border-red-200 bg-white px-2.5 py-1.5 font-medium text-red-600 hover:bg-red-50"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                            <button
+                              onClick={() => deleteQuestion(q)}
+                              className="rounded border border-red-200 bg-white px-2.5 py-1.5 font-medium text-red-600 hover:bg-red-50"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </TableBox>
           )}
 
           {questions.length === 0 && (

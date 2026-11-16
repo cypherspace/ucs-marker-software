@@ -7,6 +7,7 @@ import { Button, Card, ProgressBar } from '../components/ui';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 import { describeRun } from '../lib/duration';
 import { AiRunNotice } from '../components/AiRunNotice';
+import { GroupTick } from '../components/DataTable';
 import type { AiMode, AiScopeType, AiStrictness } from '@marker/shared-types';
 import { questionLabel } from '../lib/questionLabel';
 
@@ -151,12 +152,11 @@ export function AiMarking() {
               <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="w-10 px-3 py-2">
-                    <input
-                      type="checkbox"
-                      aria-label="Tick or clear every question"
-                      checked={questions.length > 0 && selected.length === questions.length}
-                      ref={(el) => { if (el) el.indeterminate = selected.length > 0 && selected.length < questions.length; }}
-                      onChange={(e) => { setSelected(e.target.checked ? questions.map((q) => q.id) : []); setPlan(null); }}
+                    <GroupTick
+                      label="Tick or clear every question"
+                      ticked={selected.length}
+                      total={questions.length}
+                      onChange={(on) => { setSelected(on ? questions.map((q) => q.id) : []); setPlan(null); }}
                     />
                   </th>
                   <th className="px-2 py-2">Question</th>
