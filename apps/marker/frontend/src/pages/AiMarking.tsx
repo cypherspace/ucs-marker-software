@@ -146,13 +146,58 @@ export function AiMarking() {
             <button type="button" className="text-indigo-600 hover:underline" onClick={() => { setSelected([]); setPlan(null); }}>Clear</button>
             <span className="text-slate-500">{selected.length} of {questions.length} ticked</span>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {questions.map((q) => (
-              <label key={q.id} className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-sm ${selected.includes(q.id) ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200'}`}>
-                <input type="checkbox" checked={selected.includes(q.id)} onChange={(e) => toggle(q.id, e.target.checked)} />
-                Q{questionLabel(q.question_number)} <span className="text-xs text-slate-500">({q.max_marks} mark{q.max_marks === 1 ? '' : 's'}{q.ms_clip_image_url ? '' : ', no mark scheme'})</span>
-              </label>
-            ))}
+          <div className="max-h-[32rem] overflow-auto rounded-lg border border-slate-200">
+            <table className="w-full text-left text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="w-10 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      aria-label="Tick or clear every question"
+                      checked={questions.length > 0 && selected.length === questions.length}
+                      ref={(el) => { if (el) el.indeterminate = selected.length > 0 && selected.length < questions.length; }}
+                      onChange={(e) => { setSelected(e.target.checked ? questions.map((q) => q.id) : []); setPlan(null); }}
+                    />
+                  </th>
+                  <th className="px-2 py-2">Question</th>
+                  <th className="px-2 py-2">Marks</th>
+                  <th className="whitespace-nowrap px-2 py-2">Mark scheme</th>
+                  <th className="w-full px-2 py-2">Marking guidance <span className="font-normal normal-case text-slate-400">(the mark scheme region is used too)</span></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {questions.map((q) => {
+                  const on = selected.includes(q.id);
+                  const hasMs = Boolean(q.ms_clip_image_url);
+                  const guidance = guidanceBy[q.id] ?? '';
+                  const missing = on && !hasMs && !guidance.trim();
+                  return (
+                    <tr key={q.id} className={on ? 'bg-indigo-50/60' : ''}>
+                      <td className="px-3 py-1 align-top">
+                        <input id={`ai-q-${q.id}`} type="checkbox" className="mt-1" checked={on} onChange={(e) => toggle(q.id, e.target.checked)} />
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-1 align-top font-medium text-slate-800">
+                        <label htmlFor={`ai-q-${q.id}`} className="block cursor-pointer py-0.5">Q{questionLabel(q.question_number)}</label>
+                      </td>
+                      <td className="px-2 py-1 align-top tabular-nums text-slate-600"><span className="block py-0.5">{q.max_marks}</span></td>
+                      <td className="whitespace-nowrap px-2 py-1 align-top">
+                        <span className={`block py-1.5 text-xs ${hasMs ? 'text-green-700' : 'text-amber-700'}`}>{hasMs ? '✓ clipped' : 'none'}</span>
+                      </td>
+                      <td className="px-2 py-1 align-top">
+                        <textarea
+                          rows={1}
+                          aria-label={`Marking guidance for Q${questionLabel(q.question_number)}`}
+                          value={guidance}
+                          onChange={(e) => setGuidanceBy((g) => ({ ...g, [q.id]: e.target.value }))}
+                          placeholder={hasMs ? 'Optional, e.g. accept equivalent wording' : 'Needed: this question has no mark scheme region'}
+                          className={`min-h-8 w-full resize-y rounded border px-2 py-1 text-sm ${missing ? 'border-amber-400 bg-amber-50' : 'border-slate-300'} ${on ? '' : 'opacity-60'}`}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </fieldset>
 
@@ -199,26 +244,6 @@ export function AiMarking() {
               ))}
             </div>
           </fieldset>
-        </div>
-
-        <div className="space-y-3">
-          {chosen.map((q) => {
-            const hasMs = Boolean(q.ms_clip_image_url);
-            return (
-              <label key={q.id} className="grid gap-1 text-sm font-medium text-slate-700">
-                Marking guidance for Q{questionLabel(q.question_number)}{' '}
-                {hasMs ? <span className="text-xs font-normal text-slate-500">(optional: the mark scheme region for this question is used too)</span>
-                  : <span className="text-xs font-normal text-amber-700">(needed: this question has no mark scheme region)</span>}
-                <textarea
-                  value={guidanceBy[q.id] ?? ''}
-                  onChange={(e) => setGuidanceBy((g) => ({ ...g, [q.id]: e.target.value }))}
-                  rows={hasMs ? 2 : 3}
-                  placeholder="For example: 1 mark for each correct definition; accept equivalent wording."
-                  className="rounded border border-slate-300 px-2 py-1.5 text-sm font-normal"
-                />
-              </label>
-            );
-          })}
         </div>
 
         <label className="flex items-start gap-2 text-sm text-slate-700">
