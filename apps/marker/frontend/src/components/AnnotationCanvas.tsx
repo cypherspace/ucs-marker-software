@@ -30,7 +30,7 @@ interface Props {
   maxMarkTicks?: number;
   // A tracing-paper overlay laid over the picture. While `movable` it can be dragged (so it also catches the pointer: the
   // caller turns that off for the tools that need to drag themselves, such as the circle or the ruler).
-  overlay?: { data: OverlayData; view: OverlayView; movable: boolean; onMove: (tx: number, ty: number) => void };
+  overlay?: { data: OverlayData; view: OverlayView; movable: boolean; onMove: (tx: number, ty: number) => void; onRotate: (deg: number) => void };
 }
 
 type PointerEvt = KonvaEventObject<MouseEvent | TouchEvent>;
@@ -319,6 +319,46 @@ export function AnnotationCanvas({
                   {overlay.data.shapes.map((sh, i) => <OverlayShapeView key={i} shape={sh} color={overlay.view.color} />)}
                 </Group>
               )}
+              {overlay && overlay.view.show && !overlay.view.locked && (() => {
+                // A round handle just inside the overlay's top edge: drag it round the centre to turn the overlay
+                // (Shift snaps to whole degrees). It is not turned by the overlay's own turning, so it is easy to find.
+                const cx = overlay.data.width / 2 + overlay.view.tx;
+                const cy = overlay.data.height / 2 + overlay.view.ty;
+                const d = Math.max(24 / scale, (overlay.data.height / 2) * overlay.view.scale - 28 / scale);
+                const place = (deg: number) => ({ x: cx + d * Math.sin((deg * Math.PI) / 180), y: cy - d * Math.cos((deg * Math.PI) / 180) });
+                const at = place(overlay.view.rotation);
+                const stop = (e: { cancelBubble: boolean }) => { e.cancelBubble = true; };
+                const cursor = readOnly ? 'default' : tool === 'erase' ? 'not-allowed' : 'crosshair';
+                return (
+                  <>
+                    <Line points={[cx, cy, at.x, at.y]} stroke={overlay.view.color} strokeWidth={1 / scale} dash={[4 / scale, 4 / scale]} listening={false} />
+                    <Circle x={cx} y={cy} radius={3 / scale} fill={overlay.view.color} listening={false} />
+                    <Circle
+                      x={at.x}
+                      y={at.y}
+                      radius={9 / scale}
+                      fill="#ffffff"
+                      stroke={overlay.view.color}
+                      strokeWidth={2 / scale}
+                      draggable
+                      onMouseDown={stop}
+                      onTouchStart={stop}
+                      onMouseUp={stop}
+                      onDblClick={stop}
+                      onDblTap={stop}
+                      onMouseEnter={(e) => { const c = e.target.getStage()?.container(); if (c) c.style.cursor = 'grab'; }}
+                      onMouseLeave={(e) => { const c = e.target.getStage()?.container(); if (c) c.style.cursor = cursor; }}
+                      onDragMove={(e) => {
+                        const p = e.target.position();
+                        let deg = (Math.atan2(p.x - cx, -(p.y - cy)) * 180) / Math.PI;
+                        deg = e.evt.shiftKey ? Math.round(deg) : Math.round(deg * 10) / 10;
+                        e.target.position(place(deg));
+                        overlay.onRotate(deg);
+                      }}
+                    />
+                  </>
+                );
+              })()}
               {annotations.map((ann) => (
                 <Group
                   key={ann.id}

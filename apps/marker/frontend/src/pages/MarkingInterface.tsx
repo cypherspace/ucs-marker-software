@@ -11,7 +11,7 @@ import { ScriptClipEditor } from '../components/ScriptClipEditor';
 import { OverlayEditor } from '../components/OverlayEditor';
 import { OverlayControls } from '../components/OverlayPanel';
 import { useOverlayView } from '../hooks/useOverlayView';
-import { nudge } from '../lib/overlay';
+import { normaliseRotation, nudge } from '../lib/overlay';
 import { Button } from '../components/ui';
 import { ZoomableImage } from '../components/ZoomableImage';
 import { ZoomControls } from '../components/ZoomControls';
@@ -570,7 +570,7 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
               markTickCount={ticks}
               maxMarkTicks={maxMarks}
               overlay={overlayData && overlayView.show
-                ? { data: overlayData, view: overlayView, movable: !overlayView.locked && canDragOverlay, onMove: (tx, ty) => { updateOverlayView({ tx, ty }); setOverlayPicked(true); } }
+                ? { data: overlayData, view: overlayView, movable: !overlayView.locked && canDragOverlay, onMove: (tx, ty) => { updateOverlayView({ tx, ty }); setOverlayPicked(true); }, onRotate: (deg) => updateOverlayView({ rotation: normaliseRotation(deg) }) }
                 : undefined}
             />
           )}

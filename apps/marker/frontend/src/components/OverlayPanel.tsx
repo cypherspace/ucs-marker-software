@@ -99,10 +99,18 @@ export function OverlayControls({ examId, questionId, hasOverlay, view, onChange
       </div>
 
       <div>
-        <label className={label} htmlFor="overlay-rot">Rotate: {Math.round(view.rotation * 10) / 10}°</label>
+        <label className={label} htmlFor="overlay-rot">Rotate (or drag the round handle on the overlay)</label>
+        <input id="overlay-rot" type="range" min={-180} max={180} step={0.2} value={view.rotation} onChange={(e) => onChange({ rotation: normaliseRotation(Number(e.target.value)) })} className="w-full" />
         <div className="flex items-center gap-1">
           <button type="button" className={btn} onClick={() => onChange((v) => rotateBy(v, -1))} aria-label="Rotate 1 degree left">−1°</button>
-          <input id="overlay-rot" type="range" min={-180} max={180} step={0.5} value={view.rotation} onChange={(e) => onChange({ rotation: normaliseRotation(Number(e.target.value)) })} className="min-w-0 flex-1" />
+          <button type="button" className={btn} onClick={() => onChange((v) => rotateBy(v, -0.2))} aria-label="Rotate 0.2 degrees left">−0.2°</button>
+          <input
+            type="number" step={0.1} min={-180} max={180} aria-label="Rotation in degrees"
+            value={Math.round(view.rotation * 100) / 100}
+            onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onChange({ rotation: normaliseRotation(n) }); }}
+            className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-1 text-center text-xs"
+          />
+          <button type="button" className={btn} onClick={() => onChange((v) => rotateBy(v, 0.2))} aria-label="Rotate 0.2 degrees right">+0.2°</button>
           <button type="button" className={btn} onClick={() => onChange((v) => rotateBy(v, 1))} aria-label="Rotate 1 degree right">+1°</button>
         </div>
       </div>
