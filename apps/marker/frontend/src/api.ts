@@ -4,7 +4,7 @@ import type {
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
   QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
   ComparativeStatus, ComparativeNextPair, Ranking, ClipSettings, ClipRegion, NameZone, ClipListItem,
-  MarkCombine, QuestionAgreement,
+  MarkCombine, QuestionAgreement, OverlayData, OverlayListItem,
   PracticeSetSummary, PracticeSetDetail, PracticeResults, StudentSetListItem, StudentSetView, StudentItemView, PracticeReveal, StudentSummary,
 } from '@marker/shared-types';
 
@@ -341,6 +341,16 @@ export const api = {
     const plain = /filename="([^"]+)"/i.exec(disp);
     return { bytes: new Uint8Array(await res.arrayBuffer()), filename: star ? decodeURIComponent(star[1]) : plain?.[1] ?? 'script.pdf' };
   },
+
+  // Tracing-paper overlays (any teacher who may work on the question)
+  listOverlays: (examId: string) => http<ApiSuccess<OverlayListItem[]>>(`${A}/exams/${examId}/overlays`),
+  getOverlay: (examId: string, questionId: string) => http<ApiSuccess<OverlayData | null>>(`${A}/exams/${examId}/questions/${questionId}/overlay`),
+  saveOverlay: (examId: string, questionId: string, overlay: OverlayData) =>
+    http<ApiSuccess<OverlayData>>(`${A}/exams/${examId}/questions/${questionId}/overlay`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(overlay),
+    }),
+  deleteOverlay: (examId: string, questionId: string) =>
+    http<ApiSuccess<{ ok: true }>>(`${A}/exams/${examId}/questions/${questionId}/overlay`, { method: 'DELETE' }),
 
   // AI
   aiStatus: () => http<ApiSuccess<{ configured: boolean; model: string; max_rpm: number; batch_size: number; step_size: number; max_rpd: number }>>(`${A}/ai/status`),
