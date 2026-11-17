@@ -9,14 +9,14 @@ import { AnnotationToolbar, COLORS, TOOLS, type Tool } from '../components/Annot
 import { DockablePanel } from '../components/DockablePanel';
 import { ScriptClipEditor } from '../components/ScriptClipEditor';
 import { OverlayEditor } from '../components/OverlayEditor';
-import { OverlayPanel } from '../components/OverlayPanel';
+import { OverlayControls } from '../components/OverlayPanel';
 import { useOverlayView } from '../hooks/useOverlayView';
 import { nudge } from '../lib/overlay';
 import { Button } from '../components/ui';
 import { ZoomableImage } from '../components/ZoomableImage';
 import { ZoomControls } from '../components/ZoomControls';
 import { useZoom } from '../hooks/useZoom';
-import { annotationMark, markTickTotal, nextNumber } from '../lib/annotations';
+import { annotationMark, isPointType, markTickTotal, nextNumber } from '../lib/annotations';
 import { usePersistedState } from '../hooks/usePersistedState';
 import { applyDigit, isMarkDigitKey, isSaveEnterKey, type DigitBuffer } from '../lib/markKeys';
 import type { Annotation, AnnotationData, QueueClip } from '@marker/shared-types';
@@ -121,12 +121,18 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
   // The converted-handwriting page (a saved picture of the transcription), once made
   const [convertedUrl, setConvertedUrl] = useState<string | null>(clip.converted_url);
   const [view, setView] = useState<'script' | 'converted'>('script');
-  // Tracing-paper overlay: where it sits and how it looks is remembered per question (so it stays put from script to
-  // script); only "unlocked for adjusting" and the drawing window belong to the moment and are not kept
+  // Tracing-paper overlay: where it sits, how it looks and whether it is locked is remembered per question (so it stays
+  // put from script to script); only the drawing window and which part is being nudged belong to the moment
   const [overlayView, updateOverlayView] = useOverlayView(question.id);
-  const [adjusting, setAdjusting] = useState(false);
   const [drawingOverlay, setDrawingOverlay] = useState(false);
+  // The overlay was just dragged or nudged: the arrow keys carry on moving it (not otherwise, so they still scroll the page)
+  const [overlayPicked, setOverlayPicked] = useState(false);
+  // The panel with the overlay's controls: open while the overlay is on (until it is closed with its ×), or to make one
+  const [overlayPanelHidden, setOverlayPanelHidden] = usePersistedState<boolean>('marker.overlay.panel.hidden', false, (v): v is boolean => typeof v === 'boolean');
+  const [overlayCreateOpen, setOverlayCreateOpen] = useState(false);
   const overlayData = question.overlay_data ?? null;
+  const overlayOn = Boolean(overlayData) && overlayView.show;
+  const overlayPanelOpen = overlayData ? overlayOn && !overlayPanelHidden : overlayCreateOpen;
 
   // This panel stays mounted from script to script. When the script changes, everything that belongs to one script
   // starts again from what is saved for the new one (so ticks, a typed mark or the converted view never carry over).
@@ -140,10 +146,12 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
     setShowAi(false);
     setConvertedUrl(clip.converted_url);
     setView('script');
-    setAdjusting(false);
+    setOverlayPicked(false);
   }
   const [tool, setTool] = usePersistedState<Tool>('marker.tool', 'mark_tick', (v): v is Tool => TOOLS.includes(v as Tool));
   const [color, setColor] = usePersistedState<string>('marker.color', COLORS[0], (v): v is string => COLORS.includes(v as string));
+  // Dragging works with the tick tools; the circle, underline, ruler and text tools drag on the script themselves
+  const canDragOverlay = isPointType(tool) || tool === 'erase';
   const scriptZoom = useZoom('marker.zoom.script');
   const convertedZoom = useZoom('marker.zoom.converted');
   const zoomState = view === 'converted' ? convertedZoom : scriptZoom;
@@ -234,7 +242,7 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
   const saveNext = useRef<() => void>(() => {});
   const [flash, setFlash] = useState(false);
   useEffect(() => {
-    if (showPages || stale || adjusting || drawingOverlay) return;
+    if (showPages || stale || drawingOverlay) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -262,15 +270,15 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
     };
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('keydown', onKey); clearTimeout(timer); };
-  }, [tool, maxMarks, auto, typed, showPages, stale, adjusting, drawingOverlay, canSave, saveMutation.isPending]);
+  }, [tool, maxMarks, auto, typed, showPages, stale, drawingOverlay, canSave, saveMutation.isPending]);
 
-  // While the overlay is unlocked the arrow keys move it (Shift for bigger steps) and Esc locks it again
+  // After the overlay has been dragged or nudged, the arrow keys move it a little more (Shift for bigger steps); Esc stops that
   useEffect(() => {
-    if (!adjusting) return;
+    if (!overlayPicked || !overlayOn || overlayView.locked) return;
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
-      if (e.key === 'Escape') { setAdjusting(false); return; }
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (e.key === 'Escape') { setOverlayPicked(false); return; }
       const step = e.shiftKey ? 10 : 1;
       const d: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
       const m = d[e.key];
@@ -280,7 +288,7 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [adjusting, updateOverlayView]);
+  }, [overlayPicked, overlayOn, overlayView.locked, updateOverlayView]);
 
   // Esc leaves the converted view
   useEffect(() => {
@@ -399,17 +407,20 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
           >
             {showMs ? 'Hide MS' : 'Show MS'}
           </button>
-          <OverlayPanel
-            examId={examId}
-            questionId={question.id}
-            hasOverlay={Boolean(overlayData)}
-            view={overlayView}
-            onChange={updateOverlayView}
-            adjusting={adjusting}
-            onAdjusting={setAdjusting}
-            onEdit={() => setDrawingOverlay(true)}
-            onChanged={refetch}
-          />
+          <button
+            type="button"
+            onClick={() => {
+              if (!overlayData) { setOverlayCreateOpen(!overlayCreateOpen); return; }
+              // On: shown with its controls; off: hidden
+              updateOverlayView({ show: !overlayView.show });
+              if (!overlayView.show) setOverlayPanelHidden(false);
+            }}
+            aria-pressed={overlayOn}
+            title="Tracing-paper overlay: lay the correct graph or picture over the script"
+            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${overlayOn ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+          >
+            {overlayOn ? 'Overlay on' : 'Overlay'}
+          </button>
           <button
             onClick={() => setShowPages(true)}
             title="See the other pages of this script and choose where the answer is"
@@ -422,14 +433,6 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
 
       {convertMutation.error && (
         <ErrorNotice error={convertMutation.error} onRetry={() => convertMutation.mutate(convertMutation.variables ?? false)} />
-      )}
-
-      {adjusting && overlayData && (
-        <div role="status" className="flex flex-wrap items-center gap-x-3 border-b border-amber-300 bg-amber-100 px-4 py-1.5 text-sm text-amber-900">
-          <span className="font-medium">Adjusting the overlay.</span>
-          <span>Drag it into place; the arrow keys nudge it (Shift for bigger steps). Turn and resize it from the Overlay button. Marking is paused until you lock it.</span>
-          <button type="button" onClick={() => setAdjusting(false)} className="ml-auto rounded bg-amber-600 px-3 py-0.5 text-xs font-medium text-white hover:bg-amber-700">Lock (Esc)</button>
-        </div>
       )}
 
       {clip.changed_after_marking && (
@@ -445,6 +448,27 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
         open={showMs && Boolean(clip.ms_url)}
         onClose={() => setShowMs(false)}
         panel={clip.ms_url ? <ZoomableImage src={clip.ms_url} alt="Mark scheme" storageKey="marker.zoom.ms" /> : null}
+      >
+      <DockablePanel
+        title="Overlay"
+        tone="rose"
+        defaults={{ mode: 'right', w: 300 }}
+        storageKey="marker.panel.overlay"
+        open={overlayPanelOpen}
+        onClose={() => { if (overlayData) setOverlayPanelHidden(true); else setOverlayCreateOpen(false); }}
+        panel={(
+          <OverlayControls
+            examId={examId}
+            questionId={question.id}
+            hasOverlay={Boolean(overlayData)}
+            view={overlayView}
+            onChange={updateOverlayView}
+            canDrag={canDragOverlay}
+            onNudged={() => setOverlayPicked(true)}
+            onEdit={() => setDrawingOverlay(true)}
+            onChanged={refetch}
+          />
+        )}
       >
         <div className="flex h-full min-h-0 gap-4 p-4">
           <AnnotationToolbar
@@ -546,7 +570,7 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
               markTickCount={ticks}
               maxMarkTicks={maxMarks}
               overlay={overlayData && overlayView.show
-                ? { data: overlayData, view: overlayView, adjusting, onMove: (tx, ty) => updateOverlayView({ tx, ty }) }
+                ? { data: overlayData, view: overlayView, movable: !overlayView.locked && canDragOverlay, onMove: (tx, ty) => { updateOverlayView({ tx, ty }); setOverlayPicked(true); } }
                 : undefined}
             />
           )}
@@ -576,6 +600,7 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
           )}
         </div>
       </DockablePanel>
+      </DockablePanel>
       {drawingOverlay && (
         <OverlayEditor
           examId={examId}
@@ -585,7 +610,7 @@ function MarkingPanel({ clip, examId, questionId, refetch, stale }: {
           startClipId={clip.id}
           existing={overlayData}
           onClose={() => setDrawingOverlay(false)}
-          onSaved={() => { setDrawingOverlay(false); updateOverlayView({ show: true }); refetch(); }}
+          onSaved={() => { setDrawingOverlay(false); setOverlayCreateOpen(false); setOverlayPanelHidden(false); updateOverlayView({ show: true }); refetch(); }}
         />
       )}
       {showPages && (
