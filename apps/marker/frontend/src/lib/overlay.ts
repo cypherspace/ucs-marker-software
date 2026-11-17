@@ -13,9 +13,11 @@ export interface OverlayView {
   flip: boolean;
   opacity: number;
   color: string;
+  // Locked in place: it can no longer be dragged by accident (it starts unlocked, so it can be moved straight away)
+  locked: boolean;
 }
 
-export const DEFAULT_VIEW: OverlayView = { show: true, tx: 0, ty: 0, rotation: 0, scale: 1, flip: false, opacity: 0.6, color: '#e11d48' };
+export const DEFAULT_VIEW: OverlayView = { show: true, tx: 0, ty: 0, rotation: 0, scale: 1, flip: false, opacity: 0.6, color: '#e11d48', locked: false };
 export const OVERLAY_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#000000'];
 
 export const MIN_SCALE = 0.1;

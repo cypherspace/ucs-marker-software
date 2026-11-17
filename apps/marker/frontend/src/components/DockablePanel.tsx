@@ -13,15 +13,16 @@ interface Saved {
   rect: Rect;
 }
 
-const DEFAULTS = (): Saved => ({
+const DEFAULTS = (over?: Partial<Pick<Saved, 'mode' | 'w' | 'h'>>): Saved => ({
   mode: 'right',
   w: 360,
   h: 260,
   rect: { x: Math.max(0, window.innerWidth - 440), y: 120, w: 400, h: 480 },
+  ...over,
 });
 
-function load(key: string): Saved {
-  const d = DEFAULTS();
+function load(key: string, over?: Partial<Pick<Saved, 'mode' | 'w' | 'h'>>): Saved {
+  const d = DEFAULTS(over);
   try {
     const v = JSON.parse(window.localStorage.getItem(key) ?? 'null') as Partial<Saved> | null;
     if (!v) return d;
@@ -55,6 +56,18 @@ function DockIcon({ side }: { side: Mode }) {
   );
 }
 
+// Colours for each kind of panel (written out in full so Tailwind can see the class names)
+const TONES = {
+  amber: {
+    box: 'border-amber-300 bg-amber-50', bar: 'border-amber-200 bg-amber-100', title: 'text-amber-800',
+    on: 'bg-amber-300 text-amber-900', off: 'text-amber-700 hover:bg-amber-200', close: 'text-amber-800 hover:bg-amber-200', corner: '#d97706',
+  },
+  rose: {
+    box: 'border-rose-300 bg-rose-50', bar: 'border-rose-200 bg-rose-100', title: 'text-rose-800',
+    on: 'bg-rose-300 text-rose-900', off: 'text-rose-700 hover:bg-rose-200', close: 'text-rose-800 hover:bg-rose-200', corner: '#e11d48',
+  },
+} as const;
+
 const MODE_LABEL: Record<Mode, string> = {
   left: 'Dock on the left', right: 'Dock on the right', top: 'Dock at the top', bottom: 'Dock at the bottom', float: 'Float',
 };
@@ -65,10 +78,14 @@ const MODE_LABEL: Record<Mode, string> = {
  * browser. Drag the title bar toward an edge to dock it there; the buttons do the same without dragging.
  */
 export function DockablePanel({
-  title, storageKey, open, onClose, panel, children,
+  title, storageKey, open, onClose, panel, children, tone = 'amber', defaults,
 }: {
   title: string;
   storageKey: string;
+  /** Colour of the panel, so two panels can be told apart */
+  tone?: keyof typeof TONES;
+  /** Where it starts before the user has moved it */
+  defaults?: Partial<Pick<Saved, 'mode' | 'w' | 'h'>>;
   open: boolean;
   onClose: () => void;
   /** The panel's contents */
@@ -76,7 +93,7 @@ export function DockablePanel({
   /** The main workspace the panel docks around */
   children: ReactNode;
 }) {
-  const [saved, setSaved] = useState<Saved>(() => load(storageKey));
+  const [saved, setSaved] = useState<Saved>(() => load(storageKey, defaults));
   const [drag, setDrag] = useState<{ rect: Rect; snap: Edge | null; host: Rect } | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -93,6 +110,7 @@ export function DockablePanel({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  const t = TONES[tone];
   const mode: Mode = drag ? 'float' : saved.mode;
   const vertical = mode === 'top' || mode === 'bottom';          // panel stacked above/below the workspace
   const panelFirst = mode === 'left' || mode === 'top';
@@ -223,14 +241,14 @@ export function DockablePanel({
           ref={panelRef}
           role="complementary"
           aria-label={title}
-          className={`flex min-h-0 min-w-0 flex-shrink-0 flex-col overflow-hidden border border-amber-300 bg-amber-50 ${floating ? 'rounded-lg shadow-2xl' : ''}`}
+          className={`flex min-h-0 min-w-0 flex-shrink-0 flex-col overflow-hidden border ${t.box} ${floating ? 'rounded-lg shadow-2xl' : ''}`}
           style={panelStyle}
         >
           <div
             onPointerDown={onHeaderPointerDown}
-            className="flex flex-shrink-0 cursor-grab touch-none select-none items-center gap-1 border-b border-amber-200 bg-amber-100 px-2 py-1 active:cursor-grabbing"
+            className={`flex flex-shrink-0 cursor-grab touch-none select-none items-center gap-1 border-b ${t.bar} px-2 py-1 active:cursor-grabbing`}
           >
-            <span className="flex-1 truncate text-xs font-semibold uppercase tracking-wide text-amber-800">{title}</span>
+            <span className={`flex-1 truncate text-xs font-semibold uppercase tracking-wide ${t.title}`}>{title}</span>
             {(['left', 'right', 'top', 'bottom', 'float'] as Mode[]).map((m) => (
               <button
                 key={m}
@@ -239,7 +257,7 @@ export function DockablePanel({
                 aria-label={MODE_LABEL[m]}
                 aria-pressed={saved.mode === m}
                 title={MODE_LABEL[m]}
-                className={`rounded p-1 ${saved.mode === m ? 'bg-amber-300 text-amber-900' : 'text-amber-700 hover:bg-amber-200'}`}
+                className={`rounded p-1 ${saved.mode === m ? t.on : t.off}`}
               >
                 <DockIcon side={m} />
               </button>
@@ -249,7 +267,7 @@ export function DockablePanel({
               onClick={onClose}
               aria-label={`Hide ${title}`}
               title="Hide"
-              className="ml-1 rounded px-1.5 text-base leading-none text-amber-800 hover:bg-amber-200"
+              className={`ml-1 rounded px-1.5 text-base leading-none ${t.close}`}
             >
               ×
             </button>
@@ -260,7 +278,7 @@ export function DockablePanel({
               onPointerDown={onCornerPointerDown}
               aria-label="Resize"
               className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize touch-none"
-              style={{ background: 'linear-gradient(135deg, transparent 50%, #d97706 50%)' }}
+              style={{ background: `linear-gradient(135deg, transparent 50%, ${t.corner} 50%)` }}
             />
           )}
         </div>
