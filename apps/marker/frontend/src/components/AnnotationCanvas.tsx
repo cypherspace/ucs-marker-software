@@ -1,8 +1,9 @@
 import { useRef, useState, useEffect } from 'react';
-import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Rect } from 'react-konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useClipImage } from '../lib/clipImageCache';
-import type { Annotation } from '@marker/shared-types';
+import type { Annotation, OverlayData, OverlayShape } from '@marker/shared-types';
+import type { OverlayView } from '../lib/overlay';
 import { MARK_COLOR, TOOL_LABELS, TOOLS, type Tool } from './AnnotationToolbar';
 import { findPointAt, isPointType } from '../lib/annotations';
 import { useElementWidth } from '../hooks/useElementWidth';
@@ -27,6 +28,8 @@ interface Props {
   // Mark ticks on every view added together, against the question's maximum
   markTickCount: number;
   maxMarkTicks?: number;
+  // A tracing-paper overlay laid over the picture. While `adjusting` it can be dragged and marking is paused.
+  overlay?: { data: OverlayData; view: OverlayView; adjusting: boolean; onMove: (tx: number, ty: number) => void };
 }
 
 type PointerEvt = KonvaEventObject<MouseEvent | TouchEvent>;
@@ -111,10 +114,27 @@ function renderAnnotation(ann: Annotation) {
   }
 }
 
+// One drawn overlay shape, in the overlay's own colour
+export function OverlayShapeView({ shape, color }: { shape: OverlayShape; color: string }) {
+  switch (shape.type) {
+    case 'pen':
+      return <Line points={shape.points} stroke={color} strokeWidth={shape.w} tension={0.35} lineCap="round" lineJoin="round" />;
+    case 'line':
+      return <Line points={shape.points} stroke={color} strokeWidth={shape.w} lineCap="round" />;
+    case 'circle':
+      return <Circle x={shape.x} y={shape.y} radius={shape.r} stroke={color} strokeWidth={shape.w} />;
+    case 'text':
+      return <Text x={shape.x} y={shape.y} text={shape.text} fontSize={shape.size} fill={color} fontFamily="system-ui" />;
+    default:
+      return null;
+  }
+}
+
 export function AnnotationCanvas({
   imageUrl, annotations, tool, color, zoom, onZoom, onTool, onAdd, onRemove, nextNumber,
-  readOnly = false, markTickCount, maxMarkTicks,
+  readOnly = false, markTickCount, maxMarkTicks, overlay,
 }: Props) {
+  const adjusting = Boolean(overlay?.adjusting);
   const [retry, setRetry] = useState(0);
   const [image, imageStatus] = useClipImage(retry ? `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}r=${retry}` : imageUrl);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -159,7 +179,7 @@ export function AnnotationCanvas({
   // Ticks, crosses and mark ticks are placed with a double-click (double-tap on a tablet), and a
   // double-click on one removes it, so a stray click never changes a mark.
   function handleDblClick(e: PointerEvt) {
-    if (readOnly || !isPointType(tool)) return;
+    if (readOnly || adjusting || !isPointType(tool)) return;
     const pos = getPointer(e);
     if (!pos) return;
     const hit = findPointAt(annotations, pos.x, pos.y);
@@ -182,7 +202,7 @@ export function AnnotationCanvas({
   }
 
   function handleMouseDown(e: PointerEvt) {
-    if (readOnly) return;
+    if (readOnly || adjusting) return;
     const pos = getPointer(e);
     if (!pos) return;
     if (tool === 'circle') {
@@ -207,7 +227,7 @@ export function AnnotationCanvas({
   function handleMouseUp(e: PointerEvt) {
     // The note box opens on release, not on press: opening it on mousedown let the browser's own focus handling for
     // that same click take focus straight back, which blurred the new box and closed it before anything could be typed.
-    if (tool === 'text' && !readOnly) {
+    if (tool === 'text' && !readOnly && !adjusting) {
       const at = getPointer(e);
       if (at) { setPendingText(at); setTextInput(''); }
       return;
@@ -272,10 +292,29 @@ export function AnnotationCanvas({
             onMouseUp={handleMouseUp}
             onDblClick={handleDblClick}
             onDblTap={handleDblClick}
-            style={{ cursor: readOnly ? 'default' : tool === 'erase' ? 'not-allowed' : 'crosshair', border: '1px solid #e2e8f0', borderRadius: 4 }}
+            style={{ cursor: adjusting ? 'move' : readOnly ? 'default' : tool === 'erase' ? 'not-allowed' : 'crosshair', border: '1px solid #e2e8f0', borderRadius: 4 }}
           >
             <Layer>
               {image && <KonvaImage image={image} x={0} y={0} width={imgWidth} height={imgHeight} />}
+              {overlay && overlay.view.show && (
+                // Turns and sizes about its own centre. Not clickable unless it is being adjusted, so marking works through it.
+                <Group
+                  x={overlay.data.width / 2 + overlay.view.tx}
+                  y={overlay.data.height / 2 + overlay.view.ty}
+                  offsetX={overlay.data.width / 2}
+                  offsetY={overlay.data.height / 2}
+                  rotation={overlay.view.rotation}
+                  scaleX={overlay.view.scale * (overlay.view.flip ? -1 : 1)}
+                  scaleY={overlay.view.scale}
+                  opacity={overlay.view.opacity}
+                  listening={adjusting}
+                  draggable={adjusting}
+                  onDragEnd={(e) => overlay.onMove(e.target.x() - overlay.data.width / 2, e.target.y() - overlay.data.height / 2)}
+                >
+                  {adjusting && <Rect width={overlay.data.width} height={overlay.data.height} fill="rgba(0,0,0,0.01)" stroke={overlay.view.color} dash={[8, 6]} strokeWidth={1} />}
+                  {overlay.data.shapes.map((sh, i) => <OverlayShapeView key={i} shape={sh} color={overlay.view.color} />)}
+                </Group>
+              )}
               {annotations.map((ann) => (
                 <Group
                   key={ann.id}

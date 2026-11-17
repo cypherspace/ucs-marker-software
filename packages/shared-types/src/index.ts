@@ -90,7 +90,30 @@ export interface ExamQuestion {
   name_zones: NameZone[] | null;
   ms_clip_image_url: string | null;
   marking_mode: MarkingMode;
+  // The tracing-paper overlay for this question, if one has been drawn
+  overlay_data?: OverlayData | null;
   created_at: string;
+}
+
+// A tracing-paper overlay: shapes in the pixels of the candidate clip they were drawn on. One colour is chosen when it
+// is shown, so shapes carry only their stroke width.
+export type OverlayShape =
+  | { type: 'pen'; points: number[]; w: number }                   // freehand: x1,y1,x2,y2,...
+  | { type: 'line'; points: [number, number, number, number]; w: number }
+  | { type: 'circle'; x: number; y: number; r: number; w: number }
+  | { type: 'text'; x: number; y: number; text: string; size: number };
+
+export interface OverlayData {
+  // Size of the clip image the shapes were drawn on
+  width: number;
+  height: number;
+  shapes: OverlayShape[];
+}
+
+export interface OverlayListItem {
+  question_id: string;
+  question_number: string;
+  shapes: number;
 }
 
 export type MarkingMode = 'marks' | 'comparative';
