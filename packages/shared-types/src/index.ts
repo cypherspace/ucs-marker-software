@@ -101,6 +101,7 @@ export type OverlayShape =
   | { type: 'pen'; points: number[]; w: number }                   // freehand: x1,y1,x2,y2,...
   | { type: 'line'; points: [number, number, number, number]; w: number }
   | { type: 'circle'; x: number; y: number; r: number; w: number }
+  | { type: 'rect'; x: number; y: number; width: number; height: number; w: number }  // x,y is the top-left corner
   | { type: 'text'; x: number; y: number; text: string; size: number };
 
 export interface OverlayData {

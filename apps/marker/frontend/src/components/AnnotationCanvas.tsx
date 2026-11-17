@@ -117,12 +117,15 @@ function renderAnnotation(ann: Annotation) {
 // One drawn overlay shape, in the overlay's own colour
 export function OverlayShapeView({ shape, color }: { shape: OverlayShape; color: string }) {
   switch (shape.type) {
+    // hitStrokeWidth: a thin stroke is easy to pick up with the mouse when moving or erasing it in the overlay editor
     case 'pen':
-      return <Line points={shape.points} stroke={color} strokeWidth={shape.w} tension={0.35} lineCap="round" lineJoin="round" />;
+      return <Line points={shape.points} stroke={color} strokeWidth={shape.w} hitStrokeWidth={Math.max(shape.w, 16)} tension={0.35} lineCap="round" lineJoin="round" />;
     case 'line':
-      return <Line points={shape.points} stroke={color} strokeWidth={shape.w} lineCap="round" />;
+      return <Line points={shape.points} stroke={color} strokeWidth={shape.w} hitStrokeWidth={Math.max(shape.w, 16)} lineCap="round" />;
     case 'circle':
-      return <Circle x={shape.x} y={shape.y} radius={shape.r} stroke={color} strokeWidth={shape.w} />;
+      return <Circle x={shape.x} y={shape.y} radius={shape.r} stroke={color} strokeWidth={shape.w} hitStrokeWidth={Math.max(shape.w, 16)} />;
+    case 'rect':
+      return <Rect x={shape.x} y={shape.y} width={shape.width} height={shape.height} stroke={color} strokeWidth={shape.w} hitStrokeWidth={Math.max(shape.w, 16)} />;
     case 'text':
       return <Text x={shape.x} y={shape.y} text={shape.text} fontSize={shape.size} fill={color} fontFamily="system-ui" />;
     default:
