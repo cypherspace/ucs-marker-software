@@ -223,7 +223,9 @@ export function DockablePanel({
 
   return (
     <div ref={hostRef} className={`relative flex min-h-0 min-w-0 flex-1 ${vertical ? 'flex-col' : 'flex-row'}`}>
-      <div className="min-h-0 min-w-0 flex-1" style={{ order: open && panelFirst ? 2 : 0 }}>{children}</div>
+      {/* A flex column, so that a workspace which is itself a DockablePanel (the overlay panel sits inside the mark scheme's) is held to this
+          height / width instead of growing to its own content and spilling over the panel docked on this one's other side */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ order: open && panelFirst ? 2 : 0 }}>{children}</div>
 
       {open && !floating && (
         <div
