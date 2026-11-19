@@ -51,9 +51,14 @@ export function ExamResults() {
 
   const resultsQ = useQuery({ queryKey: ['results', id, toValue(cls), combine ?? 'exam'], queryFn: () => api.getResults(id!, cls, combine), placeholderData: (prev) => prev });
 
+  // What the CSV looks like: one row per script like the table below (the default), or one row per answer for pivot tables
+  const [format, setFormat] = useState<'overview' | 'detailed'>('overview');
+  const [withNames, setWithNames] = useState(false);
+  const [perTeacher, setPerTeacher] = useState(false);
+
   const exportMut = useMutation({
-    mutationFn: ({ names, perTeacher }: { names: boolean; perTeacher?: boolean }) =>
-      api.exportResults(id!, { names, classGroup: cls, combine, perTeacher }),
+    mutationFn: ({ names, perTeacher: every, format: fmt }: { names: boolean; perTeacher: boolean; format: 'overview' | 'detailed' }) =>
+      api.exportResults(id!, { names, classGroup: cls, combine, perTeacher: every, format: fmt }),
     onSuccess: (res, { names }) => {
       if (res.data.driveUrl) {
         setMsg('Exported to Google Drive.');
@@ -128,27 +133,39 @@ export function ExamResults() {
               </select>
             </label>
           )}
-          <Button variant="primary" disabled={exportMut.isPending || r.rows.length === 0} onClick={() => { setMsg(null); exportMut.mutate({ names: false }); }}>
-            {exportMut.isPending ? 'Exporting…' : cls === undefined ? 'Export results' : 'Export this class'}
-          </Button>
-          {isLead && (
+          <fieldset className="flex flex-wrap items-end gap-x-3 gap-y-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <legend className="px-1 text-xs font-medium text-slate-500">Export to CSV</legend>
+            <label className="text-sm text-slate-600">
+              Layout
+              <select
+                value={perTeacher ? 'detailed' : format}
+                disabled={perTeacher}
+                onChange={(e) => setFormat(e.target.value as 'overview' | 'detailed')}
+                className="ml-2 min-h-11 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm sm:min-h-9"
+                title="One row per script, with a column for each question and the total (like the table below), or one row per answer for pivot tables."
+              >
+                <option value="overview">One row per script (like the table)</option>
+                <option value="detailed">One row per answer (for pivot tables)</option>
+              </select>
+            </label>
+            {isLead && (
+              <label className="flex items-center gap-1.5 text-sm text-slate-600" title="Adds student names via a database join. Names never leave the platform otherwise, and the export is logged.">
+                <input type="checkbox" checked={withNames} onChange={(e) => setWithNames(e.target.checked)} /> Student names
+              </label>
+            )}
+            {isLead && (
+              <label className="flex items-center gap-1.5 text-sm text-slate-600" title="One row per answer with a column for each teacher's own mark, their mean, and whether they differ. The export is logged.">
+                <input type="checkbox" checked={perTeacher} onChange={(e) => setPerTeacher(e.target.checked)} /> Every teacher&apos;s marks
+              </label>
+            )}
             <Button
+              variant="primary"
               disabled={exportMut.isPending || r.rows.length === 0}
-              onClick={() => { setMsg(null); exportMut.mutate({ names: true }); }}
-              title="Adds student names via a database join. Names never leave the platform otherwise."
+              onClick={() => { setMsg(null); exportMut.mutate({ names: withNames, perTeacher, format }); }}
             >
-              Export with names
+              {exportMut.isPending ? 'Exporting…' : cls === undefined ? 'Export results' : 'Export this class'}
             </Button>
-          )}
-          {isLead && (
-            <Button
-              disabled={exportMut.isPending || r.rows.length === 0}
-              onClick={() => { setMsg(null); exportMut.mutate({ names: false, perTeacher: true }); }}
-              title="Adds a column with each teacher's own mark, their mean, and whether they differ."
-            >
-              Export every teacher's marks
-            </Button>
-          )}
+          </fieldset>
         </div>
       </div>
       {msg && <p role="status" className="mb-4 text-sm text-slate-600">{msg}</p>}

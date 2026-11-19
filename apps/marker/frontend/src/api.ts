@@ -268,12 +268,13 @@ export const api = {
       }),
 
   // Export
-  exportResults: (examId: string, opts: { names?: boolean; classGroup?: string | null; combine?: MarkCombine; perTeacher?: boolean } = {}) => {
+  exportResults: (examId: string, opts: { names?: boolean; classGroup?: string | null; combine?: MarkCombine; perTeacher?: boolean; format?: 'overview' | 'detailed' } = {}) => {
     // classGroup: a class name, null for scripts with no class, undefined for everything
     const q = new URLSearchParams();
     if (opts.names) q.set('names', '1');
     if (opts.combine) q.set('combine', opts.combine);
     if (opts.perTeacher) q.set('per_teacher', '1');
+    if (opts.format) q.set('format', opts.format);
     if (opts.classGroup === null) q.set('no_class', '1');
     else if (opts.classGroup) q.set('class', opts.classGroup);
     const qs = q.toString();
