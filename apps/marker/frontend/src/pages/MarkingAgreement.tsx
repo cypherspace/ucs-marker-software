@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { NAV } from '../lib/navLabels';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
@@ -41,7 +42,7 @@ export function MarkingAgreement() {
   const header = (
     <PageHeader
       title={`Teachers' marks: Question ${a ? questionLabel(a.question_number) : ''}`}
-      crumbs={[{ label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' }, { label: examName, to: `/exams/${examId}` }, { label: 'Teachers\' marks' }]}
+      crumbs={[{ label: 'Home', to: '/' }, { label: NAV.examAdmin, to: '/exams' }, { label: examName, to: `/exams/${examId}` }, { label: 'Teachers\' marks' }]}
       back={{ to: `/exams/${examId}`, label: examName }}
       subtitle="Each teacher's mark for every script, side by side. Scripts are shown by number only."
     />

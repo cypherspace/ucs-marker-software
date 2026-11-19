@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { ADMIN_TABS, isAdminTab, NAV, type AdminTab } from '../lib/navLabels';
 import { PageHeader } from '../components/PageHeader';
 import { api } from '../api';
 import { AppLink, Button, Card, ProgressBar, StatusPill } from '../components/ui';
@@ -7,27 +9,30 @@ import type { AuditEntry, OverviewExam } from '@marker/shared-types';
 
 type Role = 'admin' | 'teacher';
 type UserRole = Role | 'student';
-type Tab = 'staff' | 'overview' | 'activity' | 'storage';
+type Tab = AdminTab;
 
-const TABS: [Tab, string][] = [['staff', 'Staff'], ['overview', 'Marking overview'], ['activity', 'Activity'], ['storage', 'Storage']];
+const TABS: [Tab, string][] = ADMIN_TABS.map((t) => [t.id, t.label]);
 
 export function Admin() {
   const meQ = useQuery({ queryKey: ['auth', 'me'], queryFn: () => api.me(), retry: false });
-  const [tab, setTab] = useState<Tab>('staff');
+  // The section is in the address (/admin?tab=storage), so it can be linked and survives a reload
+  const [params, setParams] = useSearchParams();
+  const tab: Tab = isAdminTab(params.get('tab')) ? (params.get('tab') as Tab) : 'staff';
+  const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
 
   if (meQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
   const me = meQ.data?.data;
   if (me?.role !== 'admin') {
     return (
       <div className="p-6 text-sm text-slate-600" role="alert">
-        Admin access is required to see this page.
+        System Admin access is required to see this page.
       </div>
     );
   }
 
   return (
     <div className="mx-auto max-w-6xl p-4 sm:p-6">
-      <PageHeader title="Admin" crumbs={[{ label: 'Home', to: '/' }]} subtitle="Manage who can sign in, and see how marking is going across every exam." />
+      <PageHeader title={NAV.systemAdmin} crumbs={[{ label: 'Home', to: '/' }]} subtitle="Manage who can sign in, and see how marking is going across every exam." />
       <div role="tablist" className="mb-6 flex w-fit overflow-hidden rounded-lg border border-slate-200 bg-white">
         {TABS.map(([t, label]) => (
           <button
