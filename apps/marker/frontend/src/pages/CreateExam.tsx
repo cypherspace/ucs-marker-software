@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { PageHeader } from '../components/PageHeader';
+import { ErrorNotice } from '../components/ErrorNotice';
 import { useBackTarget } from '../lib/nav';
 
 export function CreateExam() {
@@ -18,7 +19,6 @@ export function CreateExam() {
     exam_board: '',
     exam_series: '',
   });
-  const [useDrive, setUseDrive] = useState(true);
 
   const mutation = useMutation({
     mutationFn: () => api.createExam({
@@ -28,7 +28,6 @@ export function CreateExam() {
       year_group: form.year_group || undefined,
       exam_board: form.exam_board || undefined,
       exam_series: form.exam_series || undefined,
-      use_drive_storage: useDrive,
     }),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['exams'] });
@@ -88,23 +87,13 @@ export function CreateExam() {
           </div>
         </div>
 
-        <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-          <input
-            type="checkbox"
-            checked={useDrive}
-            onChange={(e) => setUseDrive(e.target.checked)}
-            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-          />
-          <div>
-            <span className="block text-sm font-medium text-slate-700">Store files in school Google Drive</span>
-            <span className="block text-xs text-slate-500">Script PDFs and clip images stay in your Google Workspace — student data never leaves your school account.</span>
-          </div>
-        </label>
+        <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+          Script PDFs, clip images and the mark scheme are kept in a folder in your school Google Drive
+          (<em>UCS Marking</em>), so student work stays in your Google Workspace. You need to be signed in with Google Drive connected.
+        </p>
 
         {mutation.error && (
-          <div className="rounded bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-            {(mutation.error as Error).message}
-          </div>
+          <ErrorNotice error={mutation.error} className="rounded border" />
         )}
 
         <div className="flex gap-3 pt-2">

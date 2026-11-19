@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { moveToDrive } from '../services/driveCopy.js';
+import { ensureExamFolder } from '../services/driveFolder.js';
 import { scriptPdfSource } from '../services/scriptSource.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { requireAuth } from '../middleware/requireAuth.js';
@@ -35,7 +36,7 @@ interface ScriptRow {
   student_number: string;
   original_pdf_url: string;
   lead_teacher_id: string;
-  use_drive_storage: boolean;
+  exam_name: string;
   drive_folder_id: string | null;
 }
 
@@ -68,8 +69,12 @@ async function makeClip(script: ScriptRow, questionId: string, regions: Region[]
   let uri = result.clips[0]?.clip_image_url;
   if (!uri) return { fail: { status: 502, error: 'The clipping service returned no image', code: 'EXTRACTOR_ERROR' } };
 
-  if (script.use_drive_storage && script.drive_folder_id) {
-    uri = await moveToDrive(script.lead_teacher_id, script.drive_folder_id, `clip_${questionId}_${script.id}.png`, uri, 'image/png');
+  // Student work is kept only in the exam's Drive folder (DRIVE_NOT_CONNECTED, HTTP 409, if that cannot be used)
+  const folderId = await ensureExamFolder({
+    id: script.exam_id, name: script.exam_name, lead_teacher_id: script.lead_teacher_id, drive_folder_id: script.drive_folder_id,
+  });
+  if (folderId) {
+    uri = await moveToDrive(script.lead_teacher_id, folderId, `clip_${questionId}_${script.id}.png`, uri, 'image/png');
   }
   return { uri };
 }
@@ -80,7 +85,7 @@ async function loadPair(req: import('express').Request, res: import('express').R
     .where('ss.id', req.params.scriptId)
     .first<ScriptRow>(
       'ss.id', 'ss.exam_id', 'ss.student_number', 'ss.original_pdf_url',
-      'e.lead_teacher_id', 'e.use_drive_storage', 'e.drive_folder_id',
+      'e.lead_teacher_id', 'e.name as exam_name', 'e.drive_folder_id',
     );
   if (!script) { res.status(404).json({ error: 'Script not found', code: 'NOT_FOUND' }); return null; }
   const access = await requireQuestionAccess(req, res, req.params.questionId, { examId: script.exam_id });

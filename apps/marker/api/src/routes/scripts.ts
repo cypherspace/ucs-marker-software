@@ -4,8 +4,9 @@ import multer from 'multer';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { storage } from '../services/storage.js';
-import { uploadFile, createExamFolder } from '../services/drive.js';
-import { moveToDrive } from '../services/driveCopy.js';
+import { uploadFile, updateFile, isDriveUri, fileIdFromUri, DriveNotConnectedError } from '../services/drive.js';
+import { moveToDrive, discardStored } from '../services/driveCopy.js';
+import { ensureExamFolder } from '../services/driveFolder.js';
 import { scriptPdfSource } from '../services/scriptSource.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { config } from '../config.js';
@@ -37,16 +38,9 @@ router.post('/exams/:id/scripts', requireAuth, requireRole(['teacher', 'admin'])
     const classGroup = rawClass || null;
     const exam = access.exam;
 
-    // Ensure Drive folder exists for this exam
-    let driveFolderId: string | null = exam.drive_folder_id ?? null;
-    if (exam.use_drive_storage && !driveFolderId) {
-      try {
-        driveFolderId = await createExamFolder(exam.lead_teacher_id, exam.name);
-        await db('exams').where({ id: req.params.id }).update({ drive_folder_id: driveFolderId });
-      } catch (err) {
-        console.warn('[drive] Folder creation failed during upload:', (err as Error).message);
-      }
-    }
+    // The exam's folder in the lead teacher's Drive (created or repaired if needed). Fails with DRIVE_NOT_CONNECTED
+    // rather than keeping a student's script in the bucket.
+    const driveFolderId = await ensureExamFolder(exam);
 
     const inserted: { id: string; student_number: string }[] = [];
     for (const file of files) {
@@ -67,7 +61,7 @@ router.post('/exams/:id/scripts', requireAuth, requireRole(['teacher', 'admin'])
       });
       try {
         let uri: string;
-        if (exam.use_drive_storage && driveFolderId) {
+        if (driveFolderId) {
           uri = await uploadFile(exam.lead_teacher_id, driveFolderId, `${row.student_number}.pdf`, file.buffer, 'application/pdf');
         } else {
           uri = await storage.write(`scripts/${req.params.id}/${row.student_number}.pdf`, file.buffer);
@@ -93,9 +87,28 @@ router.post('/exams/:id/mark-scheme', requireAuth, requireRole(['teacher', 'admi
     const exam = await loadLeadExam(req, res);
     if (!exam) return;
 
-    const key = `mark-schemes/${req.params.id}.pdf`;
-    const uri = await storage.write(key, file.buffer);
+    // The mark scheme lives in the exam's Drive folder like the scripts. A replacement updates the same Drive file,
+    // so no old copy is left behind; an older copy in the bucket is removed once the new one is stored.
+    const folderId = await ensureExamFolder(exam);
+    const previous = exam.mark_scheme_pdf_url;
+    let uri: string;
+    if (folderId) {
+      if (previous && isDriveUri(previous)) {
+        try {
+          await updateFile(exam.lead_teacher_id, fileIdFromUri(previous), file.buffer, 'application/pdf');
+          uri = previous;
+        } catch (err) {
+          if ((err as { code?: string }).code === 'DRIVE_NOT_CONNECTED') throw err;
+          uri = await uploadFile(exam.lead_teacher_id, folderId, 'mark_scheme.pdf', file.buffer, 'application/pdf');
+        }
+      } else {
+        uri = await uploadFile(exam.lead_teacher_id, folderId, 'mark_scheme.pdf', file.buffer, 'application/pdf');
+      }
+    } else {
+      uri = await storage.write(`mark-schemes/${req.params.id}.pdf`, file.buffer);   // local development only (DRIVE_OPTIONAL)
+    }
     await db('exams').where({ id: req.params.id }).update({ mark_scheme_pdf_url: uri });
+    if (previous && previous !== uri) await discardStored(exam.lead_teacher_id, previous);
     res.status(201).json({ data: { mark_scheme_pdf_url: uri } });
   } catch (err) {
     next(err);
@@ -128,8 +141,8 @@ router.get('/exams/:id/scripts', requireAuth, async (req, res, next) => {
 
 interface ClipExam {
   id: string;
+  name: string;
   lead_teacher_id: string;
-  use_drive_storage: boolean;
   drive_folder_id: string | null;
   mark_scheme_pdf_url: string | null;
 }
@@ -152,7 +165,7 @@ const ClipBodySchema = z.object({
 // The exam in the URL, if the signed-in user may set it up (its lead teacher, or an admin)
 async function loadLeadExam(req: ExpressRequest, res: ExpressResponse): Promise<ClipExam | null> {
   const exam = await db('exams').where({ id: req.params.id }).first<ClipExam>(
-    'id', 'lead_teacher_id', 'use_drive_storage', 'drive_folder_id', 'mark_scheme_pdf_url',
+    'id', 'name', 'lead_teacher_id', 'drive_folder_id', 'mark_scheme_pdf_url',
   );
   if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return null; }
   const user = req.user!;
@@ -241,6 +254,16 @@ async function clipOneScript(
   const todo = questions.filter((q) => !manual.has(q.id) && !(onlyMissing && have.has(q.id)));
   if (!todo.length) return { made: 0, kept: manual.size };
 
+  // Where the clips will be kept. Checked first so a Drive problem stops the run at once (every script would
+  // fail the same way) instead of after the extractor has done the work.
+  let folderId: string | null;
+  try {
+    folderId = await ensureExamFolder(exam);
+  } catch (err) {
+    if (err instanceof DriveNotConnectedError) return { status: 409, error: err.message, code: 'DRIVE_NOT_CONNECTED', fatal: true };
+    throw err;
+  }
+
   let src;
   try {
     src = await scriptPdfSource(script.original_pdf_url, exam.lead_teacher_id);
@@ -277,13 +300,20 @@ async function clipOneScript(
   }
   const result = (await resp.json()) as { clips: { script_id: string; question_id: string; clip_image_url: string }[] };
 
-  // Move the clip images into the lead teacher's Drive when the exam stores files there
-  if (exam.use_drive_storage && exam.drive_folder_id) {
-    await Promise.all(result.clips.map(async (c) => {
-      c.clip_image_url = await moveToDrive(
-        exam.lead_teacher_id, exam.drive_folder_id!, `clip_${c.question_id}_${c.script_id}.png`, c.clip_image_url, 'image/png',
-      );
-    }));
+  // Move the clip images into the lead teacher's Drive. If Drive refuses, the step fails (and is retried by the
+  // browser); the temporary bucket copies are overwritten by the retry.
+  if (folderId) {
+    try {
+      await Promise.all(result.clips.map(async (c) => {
+        c.clip_image_url = await moveToDrive(
+          exam.lead_teacher_id, folderId!, `clip_${c.question_id}_${c.script_id}.png`, c.clip_image_url, 'image/png',
+        );
+      }));
+    } catch (err) {
+      if (err instanceof DriveNotConnectedError) return { status: 409, error: err.message, code: 'DRIVE_NOT_CONNECTED', fatal: true };
+      console.error('[drive] Saving clips to Drive failed:', (err as Error).message);
+      return { status: 502, error: 'Could not save the clips to Google Drive. Try again in a moment.', code: 'DRIVE_ERROR', fatal: false };
+    }
   }
 
   if (result.clips.length) {
@@ -317,8 +347,13 @@ async function clipMarkScheme(exam: ClipExam, questions: ClipQuestion[]): Promis
   if (!exam.mark_scheme_pdf_url) return { created: 0 };
   const withRegions = questions.filter((q) => Array.isArray(q.ms_clip_coordinates) && q.ms_clip_coordinates.length);
   const withoutRegions = questions.filter((q) => !withRegions.includes(q)).map((q) => q.id);
+  // The existing mark scheme images (Drive files are updated in place when re-clipped, and removed when cleared)
+  const olds = await db('exam_questions').whereIn('id', questions.map((q) => q.id))
+    .select<{ id: string; ms_clip_image_url: string | null }[]>('id', 'ms_clip_image_url');
+  const oldUrl = new Map(olds.map((o) => [o.id, o.ms_clip_image_url]));
   if (withoutRegions.length) {
     await db('exam_questions').whereIn('id', withoutRegions).update({ ms_clip_image_url: null });
+    for (const id of withoutRegions) await discardStored(exam.lead_teacher_id, oldUrl.get(id));
   }
   if (!withRegions.length) return { created: 0 };
   try {
@@ -341,11 +376,21 @@ async function clipMarkScheme(exam: ClipExam, questions: ClipQuestion[]): Promis
       return { created: 0, error: `Mark scheme clipping failed (extractor returned ${msResp.status}${detail ? `: ${detail}` : ''})` };
     }
     const msResult = (await msResp.json()) as { clips: { question_id: string; ms_clip_image_url: string }[] };
+    // The extractor writes each image to the bucket; move it to the exam's Drive folder (updating the question's
+    // existing Drive file in place if it has one) and keep only the Drive address.
+    const folderId = await ensureExamFolder(exam);
     for (const c of msResult.clips) {
-      await db('exam_questions').where({ id: c.question_id }).update({ ms_clip_image_url: c.ms_clip_image_url });
+      let uri = c.ms_clip_image_url;
+      if (folderId) {
+        uri = await moveToDrive(exam.lead_teacher_id, folderId, `mark_scheme_${c.question_id}.png`, uri, 'image/png', oldUrl.get(c.question_id));
+      }
+      await db('exam_questions').where({ id: c.question_id }).update({ ms_clip_image_url: uri });
+      const old = oldUrl.get(c.question_id);
+      if (old && old !== uri) await discardStored(exam.lead_teacher_id, old);   // e.g. an older copy in the bucket
     }
     return { created: msResult.clips.length };
   } catch (err) {
+    if (err instanceof DriveNotConnectedError) throw err;   // becomes a 409 DRIVE_NOT_CONNECTED for the browser
     console.error('Mark scheme clipping failed:', err);
     return { created: 0, error: `Could not reach the clipping service: ${describeExtractorFailure(err)}` };
   }

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
-import { createExamFolder } from '../services/drive.js';
+import { newExamFolder } from '../services/driveFolder.js';
 import { recordAudit } from '../services/audit.js';
 import { storage } from '../services/storage.js';
 import { isDriveUri } from '../services/drive.js';
@@ -24,7 +24,6 @@ const CreateExamSchema = z.object({
   year_group: z.string().max(50).optional(),
   exam_board: z.string().max(100).optional(),
   exam_series: z.string().max(100).optional(),
-  use_drive_storage: z.boolean().optional(),
 });
 
 const UpdateExamSchema = CreateExamSchema.partial().extend({ mark_combine: z.enum(['latest', 'average', 'lead']).optional() });
@@ -93,21 +92,12 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 router.post('/', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
   try {
     const body = CreateExamSchema.parse(req.body);
-    const useDrive = body.use_drive_storage !== false; // default true
+    // Every exam keeps its student files in the lead teacher's Drive, so Drive must work before the exam exists
+    // (a clear DRIVE_NOT_CONNECTED error otherwise, and no exam without a folder).
+    const folderId = await newExamFolder(req.user!.sub, body.name);
     const [exam] = await db('exams')
-      .insert({ ...body, use_drive_storage: useDrive, lead_teacher_id: req.user!.sub, status: 'setup' })
+      .insert({ ...body, use_drive_storage: true, drive_folder_id: folderId, lead_teacher_id: req.user!.sub, status: 'setup' })
       .returning('*');
-
-    if (useDrive) {
-      try {
-        const folderId = await createExamFolder(req.user!.sub, exam.name);
-        await db('exams').where({ id: exam.id }).update({ drive_folder_id: folderId });
-        exam.drive_folder_id = folderId;
-      } catch (driveErr) {
-        // No refresh token yet (user hasn't re-authed with drive.file scope) — non-fatal
-        console.warn('[drive] Folder creation deferred:', (driveErr as Error).message);
-      }
-    }
 
     res.status(201).json({ data: exam });
   } catch (err) {
@@ -125,17 +115,6 @@ router.patch('/:id', requireAuth, requireRole(['teacher', 'admin']), async (req,
       res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' }); return;
     }
     const [updated] = await db('exams').where({ id: req.params.id }).update(body).returning('*');
-
-    // Lazily create Drive folder if Drive storage just enabled and no folder exists yet
-    if (updated.use_drive_storage && !updated.drive_folder_id) {
-      try {
-        const folderId = await createExamFolder(exam.lead_teacher_id, updated.name);
-        await db('exams').where({ id: req.params.id }).update({ drive_folder_id: folderId });
-        updated.drive_folder_id = folderId;
-      } catch (driveErr) {
-        console.warn('[drive] Lazy folder creation failed:', (driveErr as Error).message);
-      }
-    }
 
     res.json({ data: updated });
   } catch (err) {

@@ -39,7 +39,8 @@ export interface Exam {
   // How several teachers' marks for one clip become the one that counts in results (see services/markCombine.ts)
   mark_combine?: MarkCombine;
   mark_scheme_pdf_url: string | null;
-  use_drive_storage: boolean;
+  /** Deprecated and ignored: every exam keeps its student files in the lead teacher's Drive. */
+  use_drive_storage?: boolean;
   drive_folder_id: string | null;
   // Set when the exam has been archived: it leaves the lists and marking stops, but nothing is lost
   archived_at?: string | null;
