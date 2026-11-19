@@ -677,3 +677,72 @@ export interface StudentSummary {
   bias_note: string | null;
   items: { item_id: string; position: number; question_label: string; max_marks: number; your_mark: number; teacher_mark: number | null; difference: number | null }[];
 }
+
+// ─── AI versus teachers (lead teacher / admin) ───────────────────────────────
+
+export interface AiCmpStats {
+  compared: number;
+  exact_pct: number | null;
+  within_one_pct: number | null;
+  mean_abs_gap: number | null;
+  /** Average of (AI minus teacher): positive means the AI is more generous */
+  bias: number | null;
+}
+export interface AiCmpReason { code: string; label: string; count: number }
+export interface AiCmpGroup extends AiCmpStats { key: string; label: string }
+export interface AiCmpQuestion extends AiCmpGroup {
+  question_id: string;
+  max_marks: number;
+  ai_only: number;
+  teachers_differ: number;
+  grid: number[][] | null;
+  reasons: AiCmpReason[];
+}
+export interface AiCmpScript {
+  script_id: string;
+  student_number: string;
+  class_group: string | null;
+  questions_compared: number;
+  teacher_total: number;
+  ai_total: number;
+  max_total: number;
+  gap: number;
+}
+export interface AiCmpRow {
+  clip_id: string;
+  script_id: string;
+  student_number: string;
+  class_group: string | null;
+  question_id: string;
+  question_label: string;
+  max_marks: number;
+  teacher_mark: number | null;
+  teachers: { teacher_id: string | null; teacher: string; marks: number; typed_differs: boolean; notes: string[] }[];
+  ai_mark: number;
+  /** Only sent for answers where the AI and the teachers differ */
+  ai_reasoning: string | null;
+  ai_feedback: string | null;
+  has_converted: boolean;
+  gap: number | null;
+  direction: 'same' | 'ai_higher' | 'ai_lower' | null;
+  teachers_differ: boolean;
+  reasons: { code: string; label: string }[];
+}
+export interface AiComparison {
+  combine: MarkCombine;
+  classes: string[];
+  questions: { id: string; label: string; max_marks: number }[];
+  analysis: {
+    overall: AiCmpStats;
+    rows_total: number;
+    without_teacher_mark: number;
+    by_question: AiCmpQuestion[];
+    by_script: AiCmpScript[];
+    script_correlation: { scripts: number; pearson: number | null; rank: number | null };
+    by_band: AiCmpGroup[];
+    by_class: AiCmpGroup[];
+    by_teacher: AiCmpGroup[];
+    reasons: AiCmpReason[];
+  };
+  rows: AiCmpRow[];
+}

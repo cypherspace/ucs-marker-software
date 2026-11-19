@@ -76,7 +76,7 @@ export function AppHeader({ email, role, entries, onSignOut }: {
   const home = role === 'student' ? '/practice' : '/';
 
   return (
-    <header className="bg-indigo-700 text-white">
+    <header className="bg-indigo-700 text-white print:hidden">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2">
         <h1 className="whitespace-nowrap text-lg font-semibold"><Link to={home} className="hover:opacity-90">UCS Marking</Link></h1>
 

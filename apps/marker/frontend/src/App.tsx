@@ -16,6 +16,7 @@ import { MarkingAgreement } from './pages/MarkingAgreement';
 import { ExamPage } from './pages/ExamPage';
 import { ExamResults } from './pages/ExamResults';
 import { ExamUpload } from './pages/ExamUpload';
+import { AiReport } from './pages/AiReport';
 import { AiMarkingOverview, ComparativeOverview, MarkingLayout, MyMarking } from './pages/Marking';
 import { MarkingInterface } from './pages/MarkingInterface';
 import { ComparativeMarking } from './pages/ComparativeMarking';
@@ -120,6 +121,7 @@ export function App() {
             <Route path="ai" element={<AiMarkingOverview />} />
             <Route path="comparative" element={<ComparativeOverview />} />
           </Route>
+          <Route path="/marking/ai/report" element={<AiReport />} />
           <Route path="/marking/ai/:id" element={<RedirectTo to={(p, search) => `/marking/ai?exam=${p.id}${search.replace(/^\?/, '&')}`} />} />
           <Route path="/exams" element={<ExamList />} />
           <Route path="/exams/new" element={<CreateExam />} />

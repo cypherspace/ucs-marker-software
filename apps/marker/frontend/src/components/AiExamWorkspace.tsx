@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Button, Card, ProgressBar } from './ui';
 import { Collapsible } from './Collapsible';
+import { AiAnalysis } from './AiAnalysis';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 import { describeRun } from '../lib/duration';
 import { AiRunNotice } from './AiRunNotice';
@@ -52,7 +53,7 @@ export function AiExamWorkspace({ examId, initialQuestion }: { examId: string; i
   const [onlyDisagreements, setOnlyDisagreements] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   // Sections opened or closed by hand; otherwise they follow what is on the page (see `runOpen` / `compareOpen`)
-  const [openBy, setOpenBy] = useState<{ run?: boolean; compare?: boolean }>({});
+  const [openBy, setOpenBy] = useState<{ run?: boolean; compare?: boolean; analysis?: boolean }>({});
   const batchSize = aiQ.data?.data.batch_size ?? 5; // answers per Gemini request
   const runner = useBatchRunner(aiQ.data?.data.step_size ?? batchSize); // answers per step (several requests at once)
 
@@ -137,7 +138,8 @@ export function AiExamWorkspace({ examId, initialQuestion }: { examId: string; i
   // Sections: choosing and running is folded once the AI has marked something; the comparison is folded until then.
   // A run in progress, or a plan waiting for a go-ahead, keeps the first one open.
   const runOpen = openBy.run ?? (!hasAi || running || Boolean(plan) || planMut.isError);
-  const compareOpen = openBy.compare ?? hasAi;
+  const analysisOpen = openBy.analysis ?? hasAi;
+  const compareOpen = openBy.compare ?? false;
 
   const viewIndex = withAi.findIndex((q) => q.id === viewQuestionId);
   const results = resultsQ.data?.data;
@@ -170,7 +172,7 @@ export function AiExamWorkspace({ examId, initialQuestion }: { examId: string; i
           {runner.state.status === 'done' && (
             <p className="text-sm text-green-700">
               Finished: {runner.state.done} done{runner.state.failed.length > 0 && `, ${runner.state.failed.length} failed (details above). Run it again to retry them`}.
-              <button className="ml-2 text-indigo-600 underline" onClick={() => { runner.reset(); refresh(); setOpenBy((o) => ({ ...o, compare: true })); }}>Show results</button>
+              <button className="ml-2 text-indigo-600 underline" onClick={() => { runner.reset(); refresh(); setOpenBy((o) => ({ ...o, analysis: true })); }}>Show results</button>
             </p>
           )}
         </div>
@@ -345,7 +347,20 @@ export function AiExamWorkspace({ examId, initialQuestion }: { examId: string; i
       </Collapsible>
 
       <Collapsible
-        title="Teachers and AI compared"
+        title="Summary and analysis"
+        open={analysisOpen}
+        onToggle={() => setOpenBy((o) => ({ ...o, analysis: !analysisOpen }))}
+        summary={hasAi ? 'How closely the AI agrees with the teachers, and why it differs' : 'Available once the AI has marked some answers'}
+      >
+        {!hasAi ? (
+          <p className="text-sm text-slate-500">No AI marks yet. Run AI marking above, then come back for the summary.</p>
+        ) : (
+          <AiAnalysis examId={examId} />
+        )}
+      </Collapsible>
+
+      <Collapsible
+        title="Question by question (every answer)"
         open={compareOpen}
         onToggle={() => setOpenBy((o) => ({ ...o, compare: !compareOpen }))}
         summary={hasAi ? `${withAi.length} question${withAi.length === 1 ? '' : 's'} with AI marks` : 'Nothing to compare until the AI has marked some answers'}
