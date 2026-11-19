@@ -24,6 +24,9 @@ import { PracticeSetDetail } from './pages/PracticeSetDetail';
 import { Join } from './pages/practice/Join';
 import { PracticeMarking } from './pages/practice/PracticeMarking';
 import { PracticeSummary } from './pages/practice/PracticeSummary';
+import { PublicHome } from './pages/public/PublicHome';
+import { Privacy } from './pages/public/Privacy';
+import { Terms } from './pages/public/Terms';
 
 export function App() {
   const navigate = useNavigate();
@@ -40,20 +43,23 @@ export function App() {
   });
 
   const onJoin = location.pathname.startsWith('/join/');
+  // Pages anyone may read without signing in: the privacy policy and terms, and the home page itself (shown to visitors who are not signed in)
+  const onInfoPage = location.pathname === '/privacy' || location.pathname === '/terms';
+  const onHome = location.pathname === '/';
 
   useEffect(() => {
     const onUnauth = () => {
-      if (location.pathname !== '/login' && !onJoin) navigate('/login', { replace: true });
+      if (location.pathname !== '/login' && !onJoin && !onInfoPage && !onHome) navigate('/login', { replace: true });
     };
     window.addEventListener('marker:unauthorized', onUnauth);
     return () => window.removeEventListener('marker:unauthorized', onUnauth);
-  }, [navigate, location.pathname, onJoin]);
+  }, [navigate, location.pathname, onJoin, onInfoPage, onHome]);
 
   useEffect(() => {
-    if (meQuery.error instanceof HttpError && meQuery.error.status === 401 && location.pathname !== '/login' && !onJoin) {
+    if (meQuery.error instanceof HttpError && meQuery.error.status === 401 && location.pathname !== '/login' && !onJoin && !onInfoPage && !onHome) {
       navigate('/login', { replace: true });
     }
-  }, [meQuery.error, location.pathname, navigate, onJoin]);
+  }, [meQuery.error, location.pathname, navigate, onJoin, onInfoPage, onHome]);
 
   const me = meQuery.data?.data;
 
@@ -72,11 +78,16 @@ export function App() {
     return <Routes><Route path="/login" element={<Login />} /></Routes>;
   }
 
+  if (onInfoPage) {
+    return <Routes><Route path="/privacy" element={<Privacy />} /><Route path="/terms" element={<Terms />} /></Routes>;
+  }
+
   if (meQuery.isLoading) {
     return <div className="p-6 text-sm text-slate-500">Loading…</div>;
   }
 
-  if (!me) return <div className="p-6 text-sm text-slate-500">Redirecting…</div>;
+  // Not signed in: the home page explains the service and offers sign-in; anywhere else goes to the sign-in page
+  if (!me) return onHome ? <PublicHome /> : <div className="p-6 text-sm text-slate-500">Redirecting…</div>;
 
   const isTeacherOrAdmin = me.role === 'admin' || me.role === 'teacher';
 
