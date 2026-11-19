@@ -1,7 +1,9 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { Outlet } from 'react-router-dom';
+import { useState } from 'react';
+import { Outlet, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { ListControls, Segmented, SortSelect } from '../components/ListControls';
+import { AiExamWorkspace } from '../components/AiExamWorkspace';
 import { PageHeader } from '../components/PageHeader';
 import { TabLinks } from '../components/TabLinks';
 import { AppLink, buttonClass, Card, LinkButton, ProgressBar, StatusPill } from '../components/ui';
@@ -150,21 +152,25 @@ function QuestionRow({ examId, q }: { examId: string; q: AssignedQuestion }) {
 }
 
 // ── AI marking ───────────────────────────────────────────────────────────────
+// One page: each exam you lead is a panel that opens into its AI marking workspace. With one exam (or ?exam=)
+// it is already open, so there is no second "Open AI marking" click.
 export function AiMarkingOverview() {
   const meQ = useQuery({ queryKey: ['auth', 'me'], queryFn: () => api.me() });
   const examsQ = useQuery({ queryKey: ['exams'], queryFn: () => api.listExams() });
   const [view, setView] = useViewPref<{ sort: ExamSort }>('marker.ai.view', { sort: 'newest' });
+  const [search] = useSearchParams();
+  const [openBy, setOpenBy] = useState<Record<string, boolean>>({});
 
   const me = meQ.data?.data;
   const led = sortExams(
     (examsQ.data?.data ?? []).filter((e) => me && (me.role === 'admin' || e.lead_teacher_id === me.id) && (e.clips_total ?? 0) > 0),
     view.sort,
   );
-  const progress = useQueries({
-    queries: led.map((e) => ({ queryKey: ['progress', e.id], queryFn: () => api.getProgress(e.id) })),
-  });
 
   if (examsQ.isLoading || meQ.isLoading) return <div className="text-slate-500">Loading…</div>;
+
+  const wanted = search.get('exam');
+  const isOpen = (id: string) => openBy[id] ?? (wanted ? wanted === id : led.length === 1);
 
   return (
     <div>
@@ -178,46 +184,37 @@ export function AiMarkingOverview() {
         </div>
       ) : (
         <>
-          <ListControls>
-            <SortSelect
-              value={view.sort}
-              options={[['newest', 'Newest'], ['name', 'Exam name'], ['remaining', 'Most left to mark'], ['progress', 'Least finished']]}
-              onChange={(sort) => setView({ sort })}
-            />
-          </ListControls>
+          {led.length > 1 && (
+            <ListControls>
+              <SortSelect
+                value={view.sort}
+                options={[['newest', 'Newest'], ['name', 'Exam name'], ['remaining', 'Most left to mark'], ['progress', 'Least finished']]}
+                onChange={(sort) => setView({ sort })}
+              />
+            </ListControls>
+          )}
           <div className="space-y-4">
-            {led.map((exam, i) => {
-              const questions = (progress[i]?.data?.data.questions ?? []).filter((q) => q.marking_mode !== 'comparative');
+            {led.map((exam) => {
+              const open = isOpen(exam.id);
               return (
-                <Card key={exam.id} className="p-4">
-                  <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <h2 className="font-semibold text-slate-800">{exam.name}</h2>
-                    <StatusPill status={exam.status} />
-                    <span className="text-xs text-slate-500">{examDetails(exam)}</span>
-                    <AppLink to={`/marking/ai/${exam.id}`} className="ml-auto text-sm font-medium text-indigo-600 hover:underline">
-                      Open AI marking
-                    </AppLink>
-                  </div>
-                  {progress[i]?.isLoading ? (
-                    <p className="text-sm text-slate-500">Loading…</p>
-                  ) : questions.length === 0 ? (
-                    <p className="text-sm text-slate-500">No questions are marked with marks in this exam.</p>
-                  ) : (
-                    <ul className="divide-y divide-slate-100 rounded-lg border border-slate-100">
-                      {questions.map((q) => (
-                        <li key={q.question_id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 text-sm">
-                          <span className="w-24 font-medium text-slate-800">Question {questionLabel(q.question_number)}</span>
-                          <span className="text-slate-600">{q.marked_clips} of {q.total_clips} marked by teachers</span>
-                          <span className="text-slate-600">{q.ai_marked_clips} marked by AI</span>
-                          <AppLink
-                            to={`/marking/ai/${exam.id}?q=${q.question_id}`}
-                            className={`${buttonClass('secondary')} ml-auto`}
-                          >
-                            Run AI marking
-                          </AppLink>
-                        </li>
-                      ))}
-                    </ul>
+                <Card key={exam.id} className="overflow-hidden">
+                  <h2>
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => setOpenBy((o) => ({ ...o, [exam.id]: !open }))}
+                      className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-left hover:bg-slate-50"
+                    >
+                      <span className="font-semibold text-slate-800">{exam.name}</span>
+                      <StatusPill status={exam.status} />
+                      <span className="text-xs font-normal text-slate-500">{examDetails(exam)}</span>
+                      <span aria-hidden className="ml-auto text-slate-400">{open ? '▾' : '▸'}</span>
+                    </button>
+                  </h2>
+                  {open && (
+                    <div className="border-t border-slate-100 p-4">
+                      <AiExamWorkspace examId={exam.id} initialQuestion={wanted === exam.id ? search.get('q') : null} />
+                    </div>
                   )}
                 </Card>
               );
