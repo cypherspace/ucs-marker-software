@@ -27,6 +27,9 @@ export const config = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: Number(process.env.PORT ?? 8080),
   authDisabled: process.env.AUTH_DISABLED === 'true',
+  // Local development only: with no Drive connection, keep files in local storage instead of failing.
+  // Never set this in Cloud Run: student files must go to Drive.
+  driveOptional: process.env.DRIVE_OPTIONAL === '1' && process.env.NODE_ENV !== 'production',
   adminUserId: process.env.ADMIN_USER_UUID ?? '00000000-0000-0000-0000-000000000001',
   databaseUrl: requiredLocalDb(),
   extractorUrl: process.env.EXTRACTOR_URL ?? 'http://localhost:8081',

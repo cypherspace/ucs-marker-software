@@ -73,7 +73,7 @@ export async function requireClipAccess(
 // on it (or has uploaded scripts to it). Anyone else gets a 403, so exam details, progress and results
 // are not readable just by knowing an exam's id.
 export interface ExamAccess {
-  exam: { id: string; name: string; lead_teacher_id: string; use_drive_storage: boolean; drive_folder_id: string | null; archived_at: string | null; mark_combine: MarkCombine };
+  exam: { id: string; name: string; lead_teacher_id: string; drive_folder_id: string | null; archived_at: string | null; mark_combine: MarkCombine };
   /** Admin or the exam's lead teacher: sees everything and may set the exam up */
   isLead: boolean;
   /** Questions this teacher was asked to mark */
@@ -84,7 +84,7 @@ export async function requireExamMember(
   req: Request, res: Response, examId: string, opts: { leadOnly?: boolean; markerOrLead?: boolean } = {},
 ): Promise<ExamAccess | null> {
   const exam = await db('exams').where({ id: examId })
-    .first<ExamAccess['exam']>('id', 'name', 'lead_teacher_id', 'use_drive_storage', 'drive_folder_id', 'archived_at', 'mark_combine');
+    .first<ExamAccess['exam']>('id', 'name', 'lead_teacher_id', 'drive_folder_id', 'archived_at', 'mark_combine');
   if (!exam) { res.status(404).json({ error: 'Exam not found', code: 'NOT_FOUND' }); return null; }
   const user = req.user!;
   const isLead = user.role === 'admin' || exam.lead_teacher_id === user.sub;

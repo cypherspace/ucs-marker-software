@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { db } from '../db.js';
 import { storage } from './storage.js';
 import { uploadFile } from './drive.js';
+import { ensureExamFolder } from './driveFolder.js';
 import { describeExtractorFailure, extractorFetch } from './extractor.js';
 
 // Converted handwriting: the transcription of a clip (script_clips.ocr_text) rendered once as a page
@@ -44,17 +45,16 @@ interface ClipPlace {
   examId: string;
 }
 
-/** Store the page image where the clip images live: the exam's Drive folder for Drive exams, else the bucket. */
+/** Store the page image where the clip images live: the exam's Drive folder (never the bucket, except local development). */
 export async function saveConvertedImage(place: ClipPlace, png: Buffer): Promise<string> {
   const exam = await db('exams').where({ id: place.examId })
-    .first<{ use_drive_storage: boolean; drive_folder_id: string | null }>('use_drive_storage', 'drive_folder_id');
+    .first<{ id: string; name: string; drive_folder_id: string | null }>('id', 'name', 'drive_folder_id');
   const stamp = Date.now();
-  if (exam?.use_drive_storage && exam.drive_folder_id) {
-    try {
-      return await uploadFile(place.leadTeacherId, exam.drive_folder_id, `converted_${place.questionId}_${place.scriptId}_${stamp}.png`, png, 'image/png');
-    } catch (err) {
-      console.error('[drive] Converted-page upload failed, keeping it in storage:', (err as Error).message);
-    }
+  const folderId = exam
+    ? await ensureExamFolder({ id: exam.id, name: exam.name, lead_teacher_id: place.leadTeacherId, drive_folder_id: exam.drive_folder_id })
+    : null;
+  if (folderId) {
+    return uploadFile(place.leadTeacherId, folderId, `converted_${place.questionId}_${place.scriptId}_${stamp}.png`, png, 'image/png');
   }
   return storage.write(`text-clips/${place.questionId}/${place.scriptId}-${stamp}.png`, png);
 }

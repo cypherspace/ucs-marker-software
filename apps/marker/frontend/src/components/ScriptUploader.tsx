@@ -43,7 +43,7 @@ export function ScriptUploader({ exam, scripts }: { exam: Exam | undefined; scri
         </span>
         <datalist id="script-classes">{known.map((c) => <option key={c} value={c} />)}</datalist>
       </label>
-      {exam?.use_drive_storage && driveConfigured && (
+      {driveConfigured && (
         <DrivePicker
           onPick={queue.addDrive}
           disabled={queue.running}
@@ -52,7 +52,7 @@ export function ScriptUploader({ exam, scripts }: { exam: Exam | undefined; scri
         />
       )}
       <label className="mb-3 block text-xs text-slate-500">
-        {exam?.use_drive_storage && driveConfigured ? 'Or upload from this computer' : 'Choose PDFs from this computer'}
+        {driveConfigured ? 'Or upload from this computer' : 'Choose PDFs from this computer'}
         <input
           type="file"
           accept=".pdf"

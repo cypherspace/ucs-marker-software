@@ -224,7 +224,7 @@ export function ExamSetup() {
             {exam?.mark_scheme_pdf_url && (
               <p className="mb-2 text-sm text-green-700">✓ Mark scheme uploaded</p>
             )}
-            {exam?.use_drive_storage && driveConfigured && (
+            {driveConfigured && (
               <DrivePicker
                 multiple={false}
                 onPick={msQueue.addDrive}
@@ -234,7 +234,7 @@ export function ExamSetup() {
               />
             )}
             <label className="mb-3 block text-xs text-slate-500">
-              {exam?.use_drive_storage && driveConfigured ? 'Or upload from this computer' : 'Choose the mark scheme PDF'}
+              {driveConfigured ? 'Or upload from this computer' : 'Choose the mark scheme PDF'}
               <input
                 type="file"
                 accept=".pdf"

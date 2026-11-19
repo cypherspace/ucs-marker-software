@@ -107,7 +107,7 @@ router.get('/exams/:id/export', requireAuth, requireRole(['teacher', 'admin']), 
     }
 
     // Only the lead teacher's export goes into the lead teacher's Drive; everyone else gets the file directly
-    if (access.isLead && exam.use_drive_storage && exam.drive_folder_id) {
+    if (access.isLead && exam.drive_folder_id) {
       try {
         const driveUrl = await exportCsv(exam.lead_teacher_id, exam.drive_folder_id, filename, csv);
         res.json({ data: { driveUrl } });
