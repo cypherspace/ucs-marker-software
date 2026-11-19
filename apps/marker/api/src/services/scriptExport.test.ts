@@ -110,3 +110,31 @@ describe('markStamp', () => {
     expect((ops[0] as { y: number }).y).toBeGreaterThanOrEqual(2);
   });
 });
+
+import { aiFeedbackBlocks, type AiFeedbackRow } from './scriptExport.js';
+
+describe('aiFeedbackBlocks', () => {
+  const r = (o: Partial<AiFeedbackRow>): AiFeedbackRow => ({ question_number: '1', max_marks: 4, teacher_mark: 3, ai_mark: 1, ai_feedback: 'f', ai_reasoning: 'why', ...o });
+  const lab = (n: string) => `(${n})`;
+  const keep = (rows: AiFeedbackRow[]) => rows;
+
+  it('is empty when the AI said nothing about the script', () => {
+    expect(aiFeedbackBlocks([], lab, keep, 'x')).toEqual([]);
+    expect(aiFeedbackBlocks([r({ ai_mark: null, ai_feedback: null, ai_reasoning: ' ' })], lab, keep, 'x')).toEqual([]);
+  });
+  it('starts with a note that this is the AI\'s and the teacher\'s mark counts', () => {
+    const b = aiFeedbackBlocks([r({})], lab, keep, 'Mocks, class 10A');
+    expect(b[0].heading).toBe('Mocks, class 10A');
+    expect(b[0].paragraphs[0].text).toMatch(/teacher's mark is the one that counts/);
+  });
+  it('gives each answer its marks, feedback and reasoning', () => {
+    const b = aiFeedbackBlocks([r({})], lab, keep, 'x');
+    expect(b[1].heading).toBe('Q(1): teacher 3 / 4, AI 1 / 4');
+    expect(b[1].paragraphs).toEqual([{ label: 'AI feedback', text: 'f' }, { label: 'AI reasoning', text: 'why' }]);
+  });
+  it('copes with a missing teacher mark, missing comments and keeps the order given', () => {
+    const b = aiFeedbackBlocks([r({ question_number: '2', teacher_mark: null, ai_feedback: null, ai_reasoning: null }), r({ question_number: '1' })], lab, (x) => [...x].reverse(), 'x');
+    expect(b.map((x) => x.heading)).toEqual(['x', 'Q(1): teacher 3 / 4, AI 1 / 4', 'Q(2): not marked by a teacher, AI 1 / 4']);
+    expect(b[2].paragraphs).toEqual([{ text: 'The AI gave a mark without comments.' }]);
+  });
+});

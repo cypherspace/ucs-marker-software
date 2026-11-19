@@ -164,3 +164,40 @@ export function markStamp(first: Region, label: string, text: string): DrawOp[] 
 }
 
 export const safeFilePart = (s: string): string => s.replace(/[^\w .()-]+/g, '').trim().slice(0, 80) || 'script';
+
+// ── The AI's comments and feedback for one script, as blocks of text for a PDF ─────────────────────────────────────
+
+export interface AiFeedbackRow {
+  question_number: string;
+  max_marks: number;
+  teacher_mark: number | null;
+  ai_mark: number | null;
+  ai_feedback: string | null;
+  ai_reasoning: string | null;
+}
+
+export interface TextBlock { heading: string; paragraphs: { label?: string; text: string }[] }
+
+const NOTE = 'These comments were written by an AI (Gemini) as suggestions for the marker. Where a teacher has marked an answer, the teacher\'s mark is the one that counts.';
+
+/** One block per answer the AI commented on, in question order, after a short note saying what the document is. */
+export function aiFeedbackBlocks(
+  rows: AiFeedbackRow[], label: (questionNumber: string) => string, order: (rows: AiFeedbackRow[]) => AiFeedbackRow[], intro: string,
+): TextBlock[] {
+  const answered = order(rows).filter((r) => r.ai_mark !== null || r.ai_feedback?.trim() || r.ai_reasoning?.trim());
+  if (answered.length === 0) return [];
+  return [
+    { heading: intro, paragraphs: [{ text: NOTE }] },
+    ...answered.map((r): TextBlock => {
+      const marks = [
+        r.teacher_mark !== null ? `teacher ${r.teacher_mark} / ${r.max_marks}` : 'not marked by a teacher',
+        r.ai_mark !== null ? `AI ${r.ai_mark} / ${r.max_marks}` : null,
+      ].filter(Boolean).join(', ');
+      const paragraphs: TextBlock['paragraphs'] = [];
+      if (r.ai_feedback?.trim()) paragraphs.push({ label: 'AI feedback', text: r.ai_feedback.trim() });
+      if (r.ai_reasoning?.trim()) paragraphs.push({ label: 'AI reasoning', text: r.ai_reasoning.trim() });
+      if (paragraphs.length === 0) paragraphs.push({ text: 'The AI gave a mark without comments.' });
+      return { heading: `Q${label(r.question_number)}: ${marks}`, paragraphs };
+    }),
+  ];
+}

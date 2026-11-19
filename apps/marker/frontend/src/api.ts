@@ -38,6 +38,20 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
 
 const A = '/api/v1';
 
+// A PDF the server makes on request, with the file name it suggests
+async function fetchPdf(url: string): Promise<{ bytes: Uint8Array; filename: string }> {
+  const res = await fetch(url, { credentials: 'include' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
+    throw new HttpError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`, (body as { code?: string }).code);
+  }
+  const disp = res.headers.get('content-disposition') ?? '';
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(disp);
+  const plain = /filename="([^"]+)"/i.exec(disp);
+  return { bytes: new Uint8Array(await res.arrayBuffer()), filename: star ? decodeURIComponent(star[1]) : plain?.[1] ?? 'script.pdf' };
+}
+
 export interface AiComparisonFilters {
   combine?: MarkCombine;
   classGroup?: string | null;
@@ -358,18 +372,10 @@ export const api = {
   // Annotated scripts (lead teacher / admin): the original PDF with the marking drawn on
   annotatedScripts: (examId: string) =>
     http<ApiSuccess<{ exam_name: string; scripts: { id: string; student_number: string; class_group: string | null; clips: number }[] }>>(`${A}/exams/${examId}/annotated-scripts`),
-  annotatedPdf: async (scriptId: string, names: boolean): Promise<{ bytes: Uint8Array; filename: string }> => {
-    const res = await fetch(`${A}/scripts/${scriptId}/annotated.pdf${names ? '?names=1' : ''}`, { credentials: 'include' });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
-      throw new HttpError(res.status, (body as { error?: string }).error ?? `HTTP ${res.status}`, (body as { code?: string }).code);
-    }
-    const disp = res.headers.get('content-disposition') ?? '';
-    const star = /filename\*=UTF-8''([^;]+)/i.exec(disp);
-    const plain = /filename="([^"]+)"/i.exec(disp);
-    return { bytes: new Uint8Array(await res.arrayBuffer()), filename: star ? decodeURIComponent(star[1]) : plain?.[1] ?? 'script.pdf' };
-  },
+  annotatedPdf: (scriptId: string, names: boolean, withAi = false) =>
+    fetchPdf(`${A}/scripts/${scriptId}/annotated.pdf${names || withAi ? `?${[names && 'names=1', withAi && 'ai=1'].filter(Boolean).join('&')}` : ''}`),
+  // Only the AI's comments and feedback for one script (404 NO_AI_FEEDBACK when it has made none)
+  aiFeedbackPdf: (scriptId: string) => fetchPdf(`${A}/scripts/${scriptId}/ai-feedback.pdf`),
 
   // Tracing-paper overlays (any teacher who may work on the question)
   listOverlays: (examId: string) => http<ApiSuccess<OverlayListItem[]>>(`${A}/exams/${examId}/overlays`),

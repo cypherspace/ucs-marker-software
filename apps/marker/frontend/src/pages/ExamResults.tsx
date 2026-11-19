@@ -35,16 +35,18 @@ export function ExamResults() {
   const [cls, setCls] = useState<ClassChoice>(undefined);
   const [msg, setMsg] = useState<string | null>(null);
   const [pdfNames, setPdfNames] = useState(false);
+  const [pdfAi, setPdfAi] = useState(false);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
   // Click a column heading to sort by it; click again to reverse
   const [sortKey, setSortKey] = useState<string>('student');
   const [sortDesc, setSortDesc] = useState(false);
   const sortBy = (key: string) => { if (key === sortKey) setSortDesc((d) => !d); else { setSortKey(key); setSortDesc(key !== 'student'); } };
 
-  async function downloadPdf(scriptId: string) {
-    setPdfBusy(scriptId); setMsg(null);
+  // kind 'ai': only the AI's comments and feedback for this script
+  async function downloadPdf(scriptId: string, kind: 'annotated' | 'ai' = 'annotated') {
+    setPdfBusy(`${kind}:${scriptId}`); setMsg(null);
     try {
-      const pdf = await api.annotatedPdf(scriptId, pdfNames);
+      const pdf = kind === 'ai' ? await api.aiFeedbackPdf(scriptId) : await api.annotatedPdf(scriptId, pdfNames, pdfAi);
       saveBlob(new Blob([pdf.bytes as BlobPart], { type: 'application/pdf' }), pdf.filename);
     } catch (e) { setMsg((e as Error).message); } finally { setPdfBusy(null); }
   }
@@ -169,7 +171,7 @@ export function ExamResults() {
         </div>
       </div>
       {msg && <p role="status" className="mb-4 text-sm text-slate-600">{msg}</p>}
-      {isLead && r.rows.length > 0 && <AnnotatedExport examId={id!} classGroup={cls} names={pdfNames} onNames={setPdfNames} />}
+      {isLead && r.rows.length > 0 && <AnnotatedExport examId={id!} classGroup={cls} names={pdfNames} onNames={setPdfNames} ai={pdfAi} onAi={setPdfAi} />}
 
       {r.rows.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-slate-500">
@@ -247,15 +249,24 @@ export function ExamResults() {
                       })}
                       <td className="px-4 py-2 text-center font-medium tabular-nums">{row.possible > 0 ? `${row.total} / ${row.possible}` : '–'}</td>
                       {isLead && (
-                        <td className="px-4 py-2 text-right">
+                        <td className="whitespace-nowrap px-4 py-2 text-right">
                           <button
                             type="button"
                             disabled={pdfBusy !== null}
                             onClick={() => void downloadPdf(row.script_id)}
-                            title="Download this script as a PDF with the marking drawn on"
+                            title={pdfAi ? 'Download this script as a PDF with the marking drawn on and the AI\'s comments at the end' : 'Download this script as a PDF with the marking drawn on'}
                             className="rounded px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
                           >
-                            {pdfBusy === row.script_id ? 'Making…' : 'PDF'}
+                            {pdfBusy === `annotated:${row.script_id}` ? 'Making…' : 'PDF'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={pdfBusy !== null}
+                            onClick={() => void downloadPdf(row.script_id, 'ai')}
+                            title="Download only the AI's comments and feedback for this script"
+                            className="rounded px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+                          >
+                            {pdfBusy === `ai:${row.script_id}` ? 'Making…' : 'AI comments'}
                           </button>
                         </td>
                       )}
