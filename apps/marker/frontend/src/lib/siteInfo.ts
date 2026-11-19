@@ -4,8 +4,8 @@
 export const SITE = {
   appName: 'UCS Marking',
   // The organisation that runs the service, and a monitored mailbox for questions and deletion requests
-  operatorName: '',
-  contactEmail: '',
+  operatorName: 'Richard Wood',
+  contactEmail: 'richard.wood@ucs.org.uk',
   // The school that uses it and is responsible for its pupils' data
   schoolName: 'UCS',
   hostingRegion: 'Google Cloud, London (europe-west2)',
