@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
+import { shownEmail, shownName } from '../services/hiddenStaff.js';
 import { getClipBytes } from '../services/clipImages.js';
 import { convertedUrl } from '../services/converted.js';
 import { requireAuth } from '../middleware/requireAuth.js';
@@ -230,7 +231,7 @@ router.get('/clips/:id/marks', requireAuth, async (req, res, next) => {
     const marks = await db('script_marks')
       .leftJoin('users as u', 'u.id', 'script_marks.marker_id')
       .where('script_marks.clip_id', req.params.id)
-      .select('script_marks.*', 'u.email as marker_email', 'u.name as marker_name');
+      .select('script_marks.*', db.raw(`${shownEmail()} AS marker_email`), db.raw(`${shownName()} AS marker_name`));
     res.json({ data: marks });
   } catch (err) {
     next(err);

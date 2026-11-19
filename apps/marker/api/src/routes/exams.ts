@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
+import { shownEmail, shownName } from '../services/hiddenStaff.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { newExamFolder } from '../services/driveFolder.js';
 import { recordAudit } from '../services/audit.js';
@@ -313,7 +314,7 @@ router.get('/:id/assignments', requireAuth, async (req, res, next) => {
       .join('exam_questions as eq', 'eq.id', 'ma.question_id')
       .where('ma.exam_id', req.params.id)
       .select(
-        'ma.exam_id', 'ma.teacher_id', 'u.email as teacher_email', 'u.name as teacher_name',
+        'ma.exam_id', 'ma.teacher_id', db.raw(`${shownEmail()} AS teacher_email`), db.raw(`${shownName()} AS teacher_name`),
         'ma.question_id', 'eq.question_number', 'ma.assigned_at',
       );
     res.json({ data: sortByQuestionLabel(rows as { question_number: string }[]) });
@@ -433,14 +434,14 @@ router.get('/:id/progress', requireAuth, async (req, res, next) => {
       manual_clips: string; changed_after_marking_clips: string; conflict_clips: string;
     }[];
     const teachers = (await db.raw(
-      `SELECT ma.question_id, ma.teacher_id, u.email, COUNT(sm.id) AS marked
+      `SELECT ma.question_id, ma.teacher_id, ${shownEmail()} AS email, COUNT(sm.id) AS marked
          FROM marking_assignments ma
          JOIN users u ON u.id = ma.teacher_id
          LEFT JOIN script_clips sc ON sc.question_id = ma.question_id
          LEFT JOIN script_marks sm ON sm.clip_id = sc.id AND sm.marker_id = ma.teacher_id AND sm.status <> 'pending'
         WHERE ma.exam_id = ?
-        GROUP BY ma.question_id, ma.teacher_id, u.email
-        ORDER BY u.email`,
+        GROUP BY ma.question_id, ma.teacher_id, u.email, u.hidden
+        ORDER BY 3`,
       [req.params.id],
     )).rows as { question_id: string; teacher_id: string; email: string; marked: string }[];
 
