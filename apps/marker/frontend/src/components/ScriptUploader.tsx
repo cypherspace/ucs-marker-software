@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { DrivePicker, driveConfigured } from './DrivePicker';
@@ -10,7 +10,7 @@ import type { Exam, StudentScript } from '@marker/shared-types';
  * Upload student scripts, filed under a class name. Every PDF in one upload goes into the class typed
  * here, so a class is uploaded in one go and another class by repeating with a different name.
  */
-export function ScriptUploader({ exam, scripts }: { exam: Exam | undefined; scripts: StudentScript[] }) {
+export function ScriptUploader({ exam, scripts, onRunningChange }: { exam: Exam | undefined; scripts: StudentScript[]; onRunningChange?: (running: boolean) => void }) {
   const qc = useQueryClient();
   const [classGroup, setClassGroup] = useState('');
   const known = [...new Set(scripts.map((s) => s.class_group).filter((c): c is string => Boolean(c)))].sort();
@@ -19,6 +19,8 @@ export function ScriptUploader({ exam, scripts }: { exam: Exam | undefined; scri
   const queue = useUploadQueue((file) => api.uploadScripts(exam!.id, [file], classGroup), {
     onDone: () => { void qc.invalidateQueries({ queryKey: ['scripts', exam!.id] }); void qc.invalidateQueries({ queryKey: ['results', exam!.id] }); },
   });
+
+  useEffect(() => { onRunningChange?.(queue.running); }, [queue.running, onRunningChange]);
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
