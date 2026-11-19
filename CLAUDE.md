@@ -100,7 +100,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "marker-sa@ucs-
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "marker-sa@ucs-marking-software.iam";
 ```
 
-Applied to production: 001 to 014 (015 hidden_staff is pending, see PR; 014 overlay_data on 2026-11-17, by the owner in Cloud SQL Studio, with the `pgmigrations` row; 005, 006 and 007 on 2026-10-07, each after an on-demand backup; note 006 also deleted duplicate AI mark rows, keeping the newest per clip; 008, 009 and 010 were applied on 2026-10-09; 011 mark_combine, 012 student role and 013 practice marking on 2026-11-13, after an on-demand backup, just before PR #22 was merged). **Apply a new migration to production BEFORE merging the PR whose code needs it**, because the deploy happens on merge and the new code would query columns that do not exist yet (migrations here are additive, so the old code keeps working once they are applied). The whole procedure (backup, temporary `postgres` password, tunnel, `migrate up`, the `GRANT` statements above so `marker-sa` can use new tables and columns) is scripted in `infra/db/marker/migrate-cloudsql.mjs`; read its header for the exact PowerShell steps. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
+Applied to production: 001 to 014 (**015 hidden_staff is NOT yet applied: PR #41 waits for it, see "Pending production steps" below**; 014 overlay_data on 2026-11-17, by the owner in Cloud SQL Studio, with the `pgmigrations` row; 005, 006 and 007 on 2026-10-07, each after an on-demand backup; note 006 also deleted duplicate AI mark rows, keeping the newest per clip; 008, 009 and 010 were applied on 2026-10-09; 011 mark_combine, 012 student role and 013 practice marking on 2026-11-13, after an on-demand backup, just before PR #22 was merged). **Apply a new migration to production BEFORE merging the PR whose code needs it**, because the deploy happens on merge and the new code would query columns that do not exist yet (migrations here are additive, so the old code keeps working once they are applied). The whole procedure (backup, temporary `postgres` password, tunnel, `migrate up`, the `GRANT` statements above so `marker-sa` can use new tables and columns) is scripted in `infra/db/marker/migrate-cloudsql.mjs`; read its header for the exact PowerShell steps. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
 
 ### Secrets gotcha
 
@@ -111,6 +111,25 @@ Secrets created from PowerShell got a UTF-8 BOM, which broke the `TOKEN_ENCRYPTI
 - The project has no Google organisation (personal account), so the consent screen cannot be "Internal". It was published to production; scopes are non-sensitive (`openid email profile drive.file`) and users see an "unverified app" warning they can skip.
 - The OAuth client must list both Cloud Run URLs as redirect URIs (`<url>/auth/google/callback`) and as JavaScript origins (Drive picker).
 - Access control is the app's own `users` and `allowed_emails` tables. `ALLOW_SIGNUP` is false in production, so unknown Google accounts are rejected.
+
+### Pending production steps (015 hidden_staff, PR #41, as of 2026-11-19)
+
+PR #41 (`users.hidden`, see the "Hidden staff" bullet) is open and **must not be merged until the migration is applied**, because the new code selects `users.hidden`. The owner runs the migration from their local session with the cloud credentials (`node infra/db/marker/migrate-cloudsql.mjs`, after an on-demand backup), or by hand in Cloud SQL Studio:
+
+```sql
+ALTER TABLE users ADD COLUMN hidden boolean NOT NULL DEFAULT false;
+INSERT INTO pgmigrations (name, run_on) VALUES ('015_hidden_staff', now());
+```
+
+The `GRANT` statements above already cover the new column for `marker-sa`. Then hide the account (the address is deliberately not written in the repo):
+
+```sql
+UPDATE users SET hidden = true WHERE email = '<address to hide>';
+```
+
+Then merge PR #41 and check after the deploy that the Teachers picker and the admin Staff list no longer show the account and that it appears as "Administrator" in assignments, progress and the activity log. To undo: `UPDATE users SET hidden = false WHERE email = '...';`. Update this section and the "Applied to production" line once done.
+
+Merged since 2026-11-16 (all deployed, no migration, **not yet checked live by the owner**): PRs #35 to #40 (mark scheme read path, Drive foundation and mark scheme write path, one-page exam setup with remove scripts and the empty-PDF guard, one-page AI marking, AI-versus-teachers analysis, hand-back feedback sheets and class feedback summary). Next candidates, owner to choose: a Drive connection-health PR (needs migration 016: `users.drive_status` etc., subfolders, readable file names, "Open in Drive"), or the one-off tool that moves existing bucket scripts, clips and mark schemes into Drive (dry run, read-back verification).
 
 ## Status and next steps (as of 2026-11-16)
 
