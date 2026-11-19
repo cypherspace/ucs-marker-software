@@ -4,7 +4,7 @@ import multer from 'multer';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { storage } from '../services/storage.js';
-import { uploadFile, updateFile, isDriveUri, fileIdFromUri, DriveNotConnectedError } from '../services/drive.js';
+import { uploadFile, updateFile, deleteFile, isDriveUri, fileIdFromUri, DriveNotConnectedError } from '../services/drive.js';
 import { moveToDrive, discardStored } from '../services/driveCopy.js';
 import { ensureExamFolder } from '../services/driveFolder.js';
 import { scriptPdfSource } from '../services/scriptSource.js';
@@ -12,9 +12,12 @@ import { extractorFetch, describeExtractorFailure } from '../services/extractor.
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { requireExamMember } from '../services/access.js';
+import { recordAudit } from '../services/audit.js';
+import { pdfProblem } from '../services/pdfCheck.js';
 import { stripTextLayer } from '../services/converted.js';
 
 const router = Router();
+
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // Upload student scripts for an exam. Every PDF in one upload is filed under the class name typed with it
@@ -31,6 +34,8 @@ router.post('/exams/:id/scripts', requireAuth, requireRole(['teacher', 'admin'])
     if (!files?.length) {
       res.status(422).json({ error: 'No files uploaded', code: 'NO_FILES' }); return;
     }
+    const bad = files.map(pdfProblem).find(Boolean);
+    if (bad) { res.status(422).json({ error: bad, code: 'BAD_PDF' }); return; }
     const rawClass = typeof req.body?.class_group === 'string' ? req.body.class_group.trim().replace(/\s+/g, ' ') : '';
     if (rawClass.length > 50) {
       res.status(422).json({ error: 'A class name can be at most 50 characters', code: 'CLASS_TOO_LONG' }); return;
@@ -83,6 +88,8 @@ router.post('/exams/:id/mark-scheme', requireAuth, requireRole(['teacher', 'admi
   try {
     const file = req.file as Express.Multer.File | undefined;
     if (!file) { res.status(422).json({ error: 'No file uploaded', code: 'NO_FILE' }); return; }
+    const bad = pdfProblem(file);
+    if (bad) { res.status(422).json({ error: bad, code: 'BAD_PDF' }); return; }
 
     const exam = await loadLeadExam(req, res);
     if (!exam) return;
@@ -113,6 +120,88 @@ router.post('/exams/:id/mark-scheme', requireAuth, requireRole(['teacher', 'admi
   } catch (err) {
     next(err);
   }
+});
+
+// ── Removing scripts ─────────────────────────────────────────────────────────
+// Lead teacher or admin. A removed script takes its clips, every teacher's and the AI's marks on it, and any
+// practice items built from it with it. Its files are removed too: bucket files are deleted and Drive files go
+// to the Drive bin (recoverable there for a while, but not from this system).
+const RemoveBodySchema = z.object({ script_ids: z.array(z.string().uuid()).min(1).max(200) });
+
+async function removalFacts(examId: string, scriptIds: string[]) {
+  const scripts = await db('student_scripts').where({ exam_id: examId }).whereIn('id', scriptIds)
+    .select<{ id: string; student_number: string; class_group: string | null; original_pdf_url: string }[]>(
+      'id', 'student_number', 'class_group', 'original_pdf_url');
+  const ids = scripts.map((x) => x.id);
+  const clips = ids.length
+    ? await db('script_clips').whereIn('script_id', ids)
+        .select<{ id: string; clip_image_url: string | null; text_image_url: string | null }[]>('id', 'clip_image_url', 'text_image_url')
+    : [];
+  const clipIds = clips.map((c) => c.id);
+  const count = async (table: string, where: (qb: import('knex').Knex.QueryBuilder) => void): Promise<number> => {
+    if (!clipIds.length) return 0;
+    const row = await db(table).modify(where).count<{ n: string }[]>({ n: '*' }).first();
+    return Number(row?.n ?? 0);
+  };
+  const humanMarks = await count('script_marks', (qb) => qb.whereIn('clip_id', clipIds).where({ mark_source: 'human' }).whereIn('status', ['marked', 'moderated']));
+  const aiMarks = await count('script_marks', (qb) => qb.whereIn('clip_id', clipIds).where({ mark_source: 'ai' }));
+  const practiceItems = await count('practice_set_items', (qb) => qb.whereIn('clip_id', clipIds));
+  const uris = [
+    ...scripts.map((x) => x.original_pdf_url),
+    ...clips.flatMap((c) => [c.clip_image_url, c.text_image_url]),
+  ].filter((u): u is string => Boolean(u));
+  return { scripts, clips: clips.length, human_marks: humanMarks, ai_marks: aiMarks, practice_items: practiceItems, uris };
+}
+
+// What removing would take with it, for the confirmation box
+router.post('/exams/:id/scripts/remove-preview', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    const exam = await loadLeadExam(req, res);
+    if (!exam) return;
+    const { script_ids } = RemoveBodySchema.parse(req.body ?? {});
+    const f = await removalFacts(exam.id, script_ids);
+    res.json({ data: {
+      scripts: f.scripts.map((x) => ({ id: x.id, student_number: x.student_number, class_group: x.class_group })),
+      clips: f.clips, human_marks: f.human_marks, ai_marks: f.ai_marks, practice_items: f.practice_items,
+    } });
+  } catch (err) { next(err); }
+});
+
+router.post('/exams/:id/scripts/remove', requireAuth, requireRole(['teacher', 'admin']), async (req, res, next) => {
+  try {
+    const exam = await loadLeadExam(req, res);
+    if (!exam) return;
+    const archived = await db('exams').where({ id: exam.id }).first<{ archived_at: string | null }>('archived_at');
+    if (archived?.archived_at) {
+      res.status(409).json({ error: 'This exam is archived. Restore it before removing scripts.', code: 'EXAM_ARCHIVED' }); return;
+    }
+    const { script_ids } = RemoveBodySchema.parse(req.body ?? {});
+    const f = await removalFacts(exam.id, script_ids);
+    if (!f.scripts.length) { res.status(404).json({ error: 'Those scripts are not in this exam', code: 'NOT_FOUND' }); return; }
+
+    // Check Drive works before anything is deleted, so a Drive problem never leaves files behind with no record
+    if (f.uris.some(isDriveUri)) await ensureExamFolder(exam);
+
+    const ids = f.scripts.map((x) => x.id);
+    await db.transaction(async (trx) => {
+      await trx('student_scripts').where({ exam_id: exam.id }).whereIn('id', ids).del();   // clips, marks, practice items cascade
+    });
+
+    let filesLeft = 0;
+    for (const uri of f.uris) {
+      try {
+        if (isDriveUri(uri)) await deleteFile(exam.lead_teacher_id, fileIdFromUri(uri));
+        else await storage.delete(uri);
+      } catch (err) {
+        filesLeft += 1;
+        console.error('[scripts] Could not remove a stored file', uri, (err as Error).message);
+      }
+    }
+    await recordAudit(req, 'script.removed', 'exam', exam.id, {
+      student_numbers: f.scripts.map((x) => x.student_number), clips: f.clips, human_marks: f.human_marks, ai_marks: f.ai_marks, files_left: filesLeft,
+    });
+    res.json({ data: { removed: f.scripts.length, files_left: filesLeft } });
+  } catch (err) { next(err); }
 });
 
 // List scripts for an exam

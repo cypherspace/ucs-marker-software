@@ -90,6 +90,17 @@ export const api = {
 
   // Scripts
   listScripts: (examId: string) => http<ApiSuccess<StudentScript[]>>(`${A}/exams/${examId}/scripts`),
+  // What removing these scripts would take with it (for the confirmation box), and the removal itself
+  removeScriptsPreview: (examId: string, scriptIds: string[]) =>
+    http<ApiSuccess<{ scripts: { id: string; student_number: string; class_group: string | null }[]; clips: number; human_marks: number; ai_marks: number; practice_items: number }>>(
+      `${A}/exams/${examId}/scripts/remove-preview`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ script_ids: scriptIds }) },
+    ),
+  removeScripts: (examId: string, scriptIds: string[]) =>
+    http<ApiSuccess<{ removed: number; files_left: number }>>(
+      `${A}/exams/${examId}/scripts/remove`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ script_ids: scriptIds }) },
+    ),
   // classGroup: the class these scripts belong to (optional); every file in the call is filed under it
   uploadScripts: async (examId: string, files: File[], classGroup?: string) => {
     const form = new FormData();

@@ -8,6 +8,8 @@ import { UploadQueuePanel } from '../components/UploadQueuePanel';
 import { ScriptUploader } from '../components/ScriptUploader';
 import { QuestionClipper, type ClipperMode, type ClipperResult } from '../components/QuestionClipper';
 import { ClipRunPanel } from '../components/ClipRunPanel';
+import { StepCard, type StepState } from '../components/StepCard';
+import { ScriptList } from '../components/ScriptList';
 import { Button } from '../components/ui';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 import { useUploadQueue } from '../hooks/useUploadQueue';
@@ -16,12 +18,12 @@ import { questionLabel } from '../lib/questionLabel';
 import { AssignTeachers } from '../components/AssignTeachers';
 import { HEAD, TableBox, TH } from '../components/DataTable';
 
-type SetupTab = 'scripts' | 'questions' | 'assign';
-
 export function ExamSetup() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
-  const [tab, setTab] = useState<SetupTab>('scripts');
+  // Which steps the person opened or closed by hand; the rest follow what is done (see `stepOpen`)
+  const [openBy, setOpenBy] = useState<Record<number, boolean>>({});
+  const [uploading, setUploading] = useState(false);
 
   const examQ = useQuery({ queryKey: ['exam', id], queryFn: () => api.getExam(id!) });
   const scriptsQ = useQuery({ queryKey: ['scripts', id], queryFn: () => api.listScripts(id!) });
@@ -191,353 +193,358 @@ export function ExamSetup() {
   }
 
 
+  // ── Where the exam is up to ───────────────────────────────────────────────
+  const withRegions = questions.filter((q) => (q.clip_coordinates ?? []).length > 0).length;
+  const assignedQ = new Set(assignments.map((a) => a.question_id));
+  const unassigned = questions.filter((q) => !assignedQ.has(q.id)).length;
+  const clipsMade = questions.reduce((n, q) => n + Math.min(progressByQuestion.get(q.id)?.total_clips ?? 0, scripts.length), 0);
+  const clipsWanted = questions.length * scripts.length;
+  const classCount = new Set(scripts.map((s) => s.class_group ?? '')).size;
+
+  const done = {
+    1: scripts.length > 0,
+    2: Boolean(exam?.mark_scheme_pdf_url),
+    3: questions.length > 0 && withRegions === questions.length,
+    4: clipsWanted > 0 && clipsMade >= clipsWanted,
+    5: questions.length > 0 && unassigned === 0,
+  } as Record<number, boolean>;
+  // The step to do next: the first one not done. The mark scheme is optional, so it stops being "next" once questions exist.
+  const current = [1, 2, 3, 4, 5].find((n) => !done[n] && !(n === 2 && questions.length > 0)) ?? 0;
+  const stateOf = (n: number): StepState => (done[n] ? 'done' : n === current ? 'current' : 'todo');
+  // A step is open if the person opened it, or it is the next one to do, or its work is running right now
+  const running: Record<number, boolean> = { 1: uploading, 2: msQueue.running, 4: clipJob !== null };
+  const stepOpen = (n: number): boolean => openBy[n] ?? (n === current || Boolean(running[n]));
+  const toggleStep = (n: number) => setOpenBy((o) => ({ ...o, [n]: !stepOpen(n) }));
+
   if (examQ.isLoading) return <div className="p-6 text-slate-500">Loading…</div>;
 
+  const noScripts = scripts.length === 0;
   return (
-    <div>
-      <p className="mb-4 text-sm text-slate-500">Upload the scripts and mark scheme, mark out the questions and choose who marks what.</p>
+    <div className="space-y-3">
+      <p className="mb-1 text-sm text-slate-500">
+        Five steps, in order. A step folds away when it is done; open it again any time to change something.
+      </p>
 
-      {/* Tabs */}
-      <div className="mb-6 flex gap-0 rounded-lg border border-slate-200 bg-white overflow-hidden w-fit">
-        {([['scripts', 'Scripts'], ['questions', 'Questions'], ['assign', 'Assign Teachers']] as [SetupTab, string][]).map(([t, label]) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-5 py-2 text-sm font-medium border-r last:border-r-0 border-slate-200 transition-colors ${tab === t ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+      {/* 1. Scripts */}
+      <StepCard
+        number={1} title="Student scripts" state={stateOf(1)} open={stepOpen(1)} onToggle={() => toggleStep(1)}
+        summary={done[1] ? `${scripts.length} script${scripts.length === 1 ? '' : 's'}${classCount > 1 ? ` in ${classCount} classes` : ''}` : 'Upload one PDF per student'}
+      >
+        <ScriptUploader exam={exam} scripts={scripts} onRunningChange={setUploading} />
+        {scripts.length > 0 && <ScriptList examId={id!} scripts={scripts} disabled={Boolean(exam?.archived_at)} />}
+      </StepCard>
+
+      {/* 2. Mark scheme */}
+      <StepCard
+        number={2} title="Mark scheme" optional state={stateOf(2)} open={stepOpen(2)} onToggle={() => toggleStep(2)}
+        summary={done[2] ? 'Uploaded' : 'Upload the mark scheme PDF so markers and the AI can see it'}
+      >
+        <p className="text-xs text-slate-500">
+          Upload the mark scheme PDF. After you draw each question's <strong>mark scheme</strong> region in step 3, the clips
+          step produces a per-question image that markers can switch on while marking.
+        </p>
+        {exam?.mark_scheme_pdf_url && <p className="text-sm text-green-700">✓ Mark scheme uploaded</p>}
+        {driveConfigured && (
+          <DrivePicker
+            multiple={false}
+            onPick={msQueue.addDrive}
+            disabled={msQueue.running}
+            title="Choose the mark scheme PDF"
+            buttonLabel="Choose from Google Drive"
+          />
+        )}
+        <label className="block text-xs text-slate-500">
+          {driveConfigured ? 'Or upload from this computer' : 'Choose the mark scheme PDF'}
+          <input
+            type="file"
+            accept=".pdf"
+            disabled={msQueue.running}
+            onChange={(e) => { msQueue.addFiles(Array.from(e.target.files ?? []).slice(0, 1)); e.target.value = ''; }}
+            className="mt-1 block text-sm text-slate-600"
+          />
+        </label>
+        <UploadQueuePanel
+          queue={msQueue}
+          buttonLabel={() => (exam?.mark_scheme_pdf_url ? 'Replace Mark Scheme' : 'Upload Mark Scheme')}
+        />
+      </StepCard>
+
+      {/* 3. Questions */}
+      <StepCard
+        number={3} title="Questions and regions" state={stateOf(3)} open={stepOpen(3)} onToggle={() => toggleStep(3)}
+        summary={
+          questions.length === 0 ? 'Draw each question on a script'
+          : done[3] ? `${questions.length} question${questions.length === 1 ? '' : 's'}, all with regions`
+          : `${questions.length - withRegions} of ${questions.length} question${questions.length === 1 ? '' : 's'} still need regions`
+        }
+      >
+        <p className="text-xs text-slate-500">
+          <strong>Add questions</strong> opens a script: type the question number and marks, draw the question on
+          the page, and carry straight on to the next question. When the questions are in,{' '}
+          <strong>Clip the mark scheme</strong> shows the mark scheme itself so you can draw each answer's region on it.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="primary"
+            onClick={() => { setNotice(null); setClipper({ mode: 'add' }); }}
+            disabled={noScripts}
+            title={noScripts ? 'Upload a script first (step 1), so there is something to draw on' : 'Add questions by drawing them on a script'}
           >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Scripts tab */}
-      {tab === 'scripts' && (
-        <div className="space-y-4">
-          <ScriptUploader exam={exam} scripts={scripts} />
-
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="font-medium text-slate-700 mb-3">Mark Scheme</h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Upload the mark scheme PDF. After drawing each question's <strong>mark scheme</strong> region,
-              "Generate Clips" produces a per-question MS image that markers can toggle on while marking.
-            </p>
-            {exam?.mark_scheme_pdf_url && (
-              <p className="mb-2 text-sm text-green-700">✓ Mark scheme uploaded</p>
-            )}
-            {driveConfigured && (
-              <DrivePicker
-                multiple={false}
-                onPick={msQueue.addDrive}
-                disabled={msQueue.running}
-                title="Choose the mark scheme PDF"
-                buttonLabel="Choose from Google Drive"
-              />
-            )}
-            <label className="mb-3 block text-xs text-slate-500">
-              {driveConfigured ? 'Or upload from this computer' : 'Choose the mark scheme PDF'}
-              <input
-                type="file"
-                accept=".pdf"
-                disabled={msQueue.running}
-                onChange={(e) => { msQueue.addFiles(Array.from(e.target.files ?? []).slice(0, 1)); e.target.value = ''; }}
-                className="mt-1 block text-sm text-slate-600"
-              />
-            </label>
-            <UploadQueuePanel
-              queue={msQueue}
-              buttonLabel={() => (exam?.mark_scheme_pdf_url ? 'Replace Mark Scheme' : 'Upload Mark Scheme')}
-            />
-          </div>
-
-          {scripts.length > 0 && (
-            <div className="rounded-lg border border-slate-200 bg-white">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
-                <h2 className="font-medium text-slate-700">{scripts.length} Scripts Uploaded</h2>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => {
-                      if (window.confirm('Cut every script again, including the ones already clipped? This takes as long as the first time. '
-                        + 'Clips you chose by hand are kept. Use it after changing question regions.')) void runClipping(undefined, false);
-                    }}
-                    disabled={clipBusy || questions.length === 0}
-                    className="text-xs text-slate-500 underline hover:text-slate-700 disabled:opacity-50"
-                    title="Clip every script again, not just the ones that have no clips yet"
-                  >
-                    Re-clip all
-                  </button>
-                  <button
-                    onClick={() => void runClipping(undefined, true)}
-                    disabled={clipBusy || questions.length === 0}
-                    className="rounded-lg bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                    title={questions.length === 0 ? 'Define questions first' : 'Clip the scripts that have no clips yet'}
-                  >
-                    {clipBusy ? 'Clipping…' : 'Generate Clips'}
-                  </button>
-                </div>
-              </div>
-              {clipJob && (
-                <ClipRunPanel
-                  state={clipRunner.state}
-                  finishing={clipJob.finishing}
-                  finished={clipJob.finished}
-                  error={clipJob.error}
-                  alreadyClipped={clipJob.alreadyClipped}
-                  label={(sid) => `Student ${scripts.find((s) => s.id === sid)?.student_number ?? sid}`}
-                  onPause={clipRunner.pause}
-                  onResume={clipRunner.resume}
-                  onDismiss={dismissClipJob}
-                />
-              )}
-              <div className="max-h-48 overflow-y-auto divide-y divide-slate-100">
-                {scripts.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between px-4 py-2 text-sm">
-                    <span className="text-slate-600">Student {s.student_number}{s.class_group ? <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{s.class_group}</span> : null}</span>
-                    <span className="text-xs text-slate-400">{new Date(s.uploaded_at).toLocaleDateString()}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+            Add questions
+          </Button>
+          <Button
+            onClick={() => { setNotice(null); setClipper({ mode: 'mark-scheme' }); }}
+            disabled={!exam?.mark_scheme_pdf_url || questions.length === 0}
+            title={
+              !exam?.mark_scheme_pdf_url ? 'Upload the mark scheme first (step 2)'
+              : questions.length === 0 ? 'Add some questions first'
+              : 'Draw each question\'s region on the mark scheme'
+            }
+          >
+            Clip the mark scheme
+          </Button>
+          {noScripts && <span className="text-xs text-slate-500">Upload a script first (step 1).</span>}
         </div>
-      )}
 
-      {/* Questions tab */}
-      {tab === 'questions' && (
-        <div className="space-y-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <h2 className="font-medium text-slate-700 mb-1">Questions</h2>
-            <p className="text-xs text-slate-500 mb-3">
-              <strong>Add questions</strong> opens a script: type the question number and marks, draw the question on
-              the page, and carry straight on to the next question. When the questions are in,{' '}
-              <strong>Clip the mark scheme</strong> shows the mark scheme itself so you can draw each answer's region on it.
-            </p>
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="primary"
-                onClick={() => { setNotice(null); setClipper({ mode: 'add' }); }}
-                disabled={scripts.length === 0}
-                title={scripts.length === 0 ? 'Upload a script first, so there is something to draw on' : 'Add questions by drawing them on a script'}
-              >
-                Add questions
+        {notice && (
+          <div
+            role="status"
+            className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${
+              notice.tone === 'ok' ? 'border-green-200 bg-green-50 text-green-900' : 'border-red-200 bg-red-50 text-red-800'
+            }`}
+          >
+            <span className="min-w-0 flex-1">{notice.text}</span>
+            {notice.reclipAll && (
+              <Button variant="primary" onClick={() => { setNotice(null); void runClipping(undefined, false); }} disabled={clipBusy}>
+                Re-clip all now
               </Button>
-              <Button
-                onClick={() => { setNotice(null); setClipper({ mode: 'mark-scheme' }); }}
-                disabled={!exam?.mark_scheme_pdf_url || questions.length === 0}
-                title={
-                  !exam?.mark_scheme_pdf_url ? 'Upload the mark scheme first (on the Scripts tab)'
-                  : questions.length === 0 ? 'Add some questions first'
-                  : 'Draw each question\'s region on the mark scheme'
-                }
-              >
-                Clip the mark scheme
+            )}
+            {notice.generate && (
+              <Button variant="primary" onClick={() => { setNotice(null); void runClipping(undefined, true); }} disabled={clipBusy}>
+                Generate clips now
               </Button>
-              {scripts.length === 0 && <span className="text-xs text-slate-500">Upload a script first (Scripts tab).</span>}
-              {scripts.length > 0 && !exam?.mark_scheme_pdf_url && (
-                <span className="text-xs text-slate-500">No mark scheme uploaded yet (Scripts tab).</span>
-              )}
-            </div>
+            )}
+            <button onClick={() => setNotice(null)} className="text-xs underline">Dismiss</button>
           </div>
+        )}
 
-          {notice && (
-            <div
-              role="status"
-              className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${
-                notice.tone === 'ok' ? 'border-green-200 bg-green-50 text-green-900' : 'border-red-200 bg-red-50 text-red-800'
-              }`}
+        {reclip && (
+          <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <span className="min-w-0 flex-1">
+              Regions for Q{questionLabel(reclip.question.question_number)} changed, so its {reclip.clips} generated clip{reclip.clips === 1 ? '' : 's'} use the old crop.
+              {reclip.marked > 0 && ` ${reclip.marked} of them ${reclip.marked === 1 ? 'has' : 'have'} already been marked on the old crop.`}
+              {clipJob && ' Progress is shown in step 4.'}
+            </span>
+            <button
+              onClick={() => void runClipping([reclip.question.id])}
+              disabled={clipBusy}
+              className="rounded-lg bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
             >
-              <span className="min-w-0 flex-1">{notice.text}</span>
-              {notice.reclipAll && (
-                <Button variant="primary" onClick={() => { setNotice(null); void runClipping(undefined, false); }} disabled={clipBusy}>
-                  Re-clip all now
-                </Button>
-              )}
-              {notice.generate && (
-                <Button variant="primary" onClick={() => { setNotice(null); void runClipping(undefined, true); }} disabled={clipBusy}>
-                  Generate clips now
-                </Button>
-              )}
-              <button onClick={() => setNotice(null)} className="text-xs underline">Dismiss</button>
-            </div>
-          )}
+              {clipBusy ? 'Re-clipping…' : `Re-clip Q${questionLabel(reclip.question.question_number)}`}
+            </button>
+            <button onClick={() => setReclip(null)} className="rounded-lg px-3 py-1.5 text-amber-800 hover:bg-amber-100">Not now</button>
+            {clipJob?.error && <span className="w-full text-red-700">{clipJob.error}</span>}
+          </div>
+        )}
 
-          {reclip && (
-            <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <span className="min-w-0 flex-1">
-                Regions for Q{questionLabel(reclip.question.question_number)} changed, so its {reclip.clips} generated clip{reclip.clips === 1 ? '' : 's'} use the old crop.
-                {reclip.marked > 0 && ` ${reclip.marked} of them ${reclip.marked === 1 ? 'has' : 'have'} already been marked on the old crop.`}
-              </span>
-              <button
-                onClick={() => void runClipping([reclip.question.id])}
-                disabled={clipBusy}
-                className="rounded-lg bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-              >
-                {clipBusy ? 'Re-clipping…' : `Re-clip Q${questionLabel(reclip.question.question_number)}`}
-              </button>
-              <button onClick={() => setReclip(null)} className="rounded-lg px-3 py-1.5 text-amber-800 hover:bg-amber-100">Not now</button>
-              {clipJob?.error && <span className="w-full text-red-700">{clipJob.error}</span>}
-            </div>
-          )}
+        {questionError && (
+          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{questionError}</div>
+        )}
 
-          {clipJob && (
-            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-              <ClipRunPanel
-                state={clipRunner.state}
-                finishing={clipJob.finishing}
-                finished={clipJob.finished}
-                error={clipJob.error}
-                  alreadyClipped={clipJob.alreadyClipped}
-                label={(sid) => `Student ${scripts.find((s) => s.id === sid)?.student_number ?? sid}`}
-                onPause={clipRunner.pause}
-                onResume={clipRunner.resume}
-                onDismiss={dismissClipJob}
-              />
-            </div>
-          )}
-
-          {questionError && (
-            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{questionError}</div>
-          )}
-
-          {questions.length > 0 && (
-            <TableBox maxHeight="40rem">
-              <table className="w-full min-w-max text-sm">
-                <thead className={HEAD}>
-                  <tr>
-                    <th className={TH}>Question</th>
-                    <th className={TH}>Marks</th>
-                    <th className={TH}>Clips</th>
-                    <th className={TH}>Answer regions</th>
-                    <th className={TH}>Mark scheme</th>
-                    <th className={TH} title="Rank the scripts by comparing pairs instead of giving marks. Useful for essay questions.">Rank by comparison</th>
-                    <th className={`${TH} text-right`}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {questions.map((q: ExamQuestion) => {
-                    const isEditing = editingQId === q.id;
-                    const clips = progressByQuestion.get(q.id)?.total_clips ?? 0;
-                    if (isEditing) {
-                      return (
-                        <tr key={q.id} className="bg-indigo-50/50">
-                          <td className="px-2 py-2" colSpan={2}>
-                            <div className="flex flex-wrap items-center gap-3">
-                              <QuestionLabelInput key={q.id} value={editNumber} onChange={setEditNumber} />
-                              <label className="flex items-center gap-1 text-sm text-slate-500">
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={100}
-                                  value={editMarks}
-                                  onChange={(e) => setEditMarks(e.target.value)}
-                                  aria-label="Maximum marks"
-                                  className="w-20 rounded border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                                />
-                                marks
-                              </label>
-                            </div>
-                          </td>
-                          <td colSpan={4} />
-                          <td className="px-2 py-2">
-                            <div className="flex items-center justify-end gap-2 text-xs">
-                              <button
-                                onClick={() => updateQuestionMutation.mutate(q)}
-                                disabled={!editNumber.trim() || editMarks === '' || updateQuestionMutation.isPending}
-                                className="rounded bg-indigo-600 px-3 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
-                              >
-                                Save
-                              </button>
-                              <button
-                                onClick={() => { setEditingQId(null); setQuestionError(null); }}
-                                className="rounded border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    }
-                    const coords: { page: number }[] = q.clip_coordinates ?? [];
-                    const pages = [...new Set(coords.map((r) => r.page))].sort((a, b) => a - b);
-                    const hasMsRegion = (q.ms_clip_coordinates ?? []).length > 0;
+        {questions.length > 0 && (
+          <TableBox maxHeight="40rem">
+            <table className="w-full min-w-max text-sm">
+              <thead className={HEAD}>
+                <tr>
+                  <th className={TH}>Question</th>
+                  <th className={TH}>Marks</th>
+                  <th className={TH}>Clips</th>
+                  <th className={TH}>Answer regions</th>
+                  <th className={TH}>Mark scheme</th>
+                  <th className={TH} title="Rank the scripts by comparing pairs instead of giving marks. Useful for essay questions.">Rank by comparison</th>
+                  <th className={`${TH} text-right`}>Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {questions.map((q: ExamQuestion) => {
+                  const isEditing = editingQId === q.id;
+                  const clips = progressByQuestion.get(q.id)?.total_clips ?? 0;
+                  if (isEditing) {
                     return (
-                      <tr key={q.id}>
-                        <td className="whitespace-nowrap px-2 py-1.5 font-medium text-slate-800">Q{questionLabel(q.question_number)}</td>
-                        <td className="px-2 py-1.5 tabular-nums text-slate-600">{q.max_marks}</td>
-                        <td className="px-2 py-1.5 tabular-nums text-slate-500">{clips || <span className="text-slate-300">–</span>}</td>
-                        <td className="whitespace-nowrap px-2 py-1.5 text-xs">
-                          {coords.length === 0
-                            ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">No regions yet</span>
-                            : <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">{coords.length} region{coords.length !== 1 ? 's' : ''} · p.{pages.join(', ')}</span>}
+                      <tr key={q.id} className="bg-indigo-50/50">
+                        <td className="px-2 py-2" colSpan={2}>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <QuestionLabelInput key={q.id} value={editNumber} onChange={setEditNumber} />
+                            <label className="flex items-center gap-1 text-sm text-slate-500">
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={editMarks}
+                                onChange={(e) => setEditMarks(e.target.value)}
+                                aria-label="Maximum marks"
+                                className="w-20 rounded border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+                              />
+                              marks
+                            </label>
+                          </div>
                         </td>
-                        <td className="whitespace-nowrap px-2 py-1.5 text-xs">
-                          <span
-                            className={`rounded-full px-2 py-0.5 ${hasMsRegion ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}
-                            title="Where this question's answer is on the mark scheme"
-                          >
-                            {hasMsRegion ? '✓ region' : 'No region'}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <input
-                            type="checkbox"
-                            aria-label={`Rank Q${questionLabel(q.question_number)} by comparison`}
-                            checked={q.marking_mode === 'comparative'}
-                            disabled={modeMutation.isPending}
-                            onChange={(e) => modeMutation.mutate({ q, comparative: e.target.checked })}
-                          />
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <div className="flex items-center justify-end gap-1.5 whitespace-nowrap text-xs">
+                        <td colSpan={4} />
+                        <td className="px-2 py-2">
+                          <div className="flex items-center justify-end gap-2 text-xs">
                             <button
-                              onClick={() => { setNotice(null); setClipper({ mode: 'edit', question: q }); }}
-                              disabled={scripts.length === 0}
-                              title={scripts.length === 0 ? 'Upload a script first to draw on' : 'Draw or edit clip regions'}
-                              className="rounded bg-indigo-600 px-2.5 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                              onClick={() => updateQuestionMutation.mutate(q)}
+                              disabled={!editNumber.trim() || editMarks === '' || updateQuestionMutation.isPending}
+                              className="rounded bg-indigo-600 px-3 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
                             >
-                              {coords.length > 0 ? 'Edit regions' : 'Draw regions'}
-                            </button>
-                            {exam?.mark_scheme_pdf_url && (
-                              <button
-                                onClick={() => { setNotice(null); setClipper({ mode: 'mark-scheme', question: q }); }}
-                                title="Draw this question's region on the mark scheme"
-                                className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
-                              >
-                                Mark scheme
-                              </button>
-                            )}
-                            <button
-                              onClick={() => startEditing(q)}
-                              className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
-                            >
-                              Edit
+                              Save
                             </button>
                             <button
-                              onClick={() => deleteQuestion(q)}
-                              className="rounded border border-red-200 bg-white px-2.5 py-1.5 font-medium text-red-600 hover:bg-red-50"
+                              onClick={() => { setEditingQId(null); setQuestionError(null); }}
+                              className="rounded border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
                             >
-                              Delete
+                              Cancel
                             </button>
                           </div>
                         </td>
                       </tr>
                     );
-                  })}
-                </tbody>
-              </table>
-            </TableBox>
-          )}
+                  }
+                  const coords: { page: number }[] = q.clip_coordinates ?? [];
+                  const pages = [...new Set(coords.map((r) => r.page))].sort((a, b) => a - b);
+                  const hasMsRegion = (q.ms_clip_coordinates ?? []).length > 0;
+                  return (
+                    <tr key={q.id}>
+                      <td className="whitespace-nowrap px-2 py-1.5 font-medium text-slate-800">Q{questionLabel(q.question_number)}</td>
+                      <td className="px-2 py-1.5 tabular-nums text-slate-600">{q.max_marks}</td>
+                      <td className="px-2 py-1.5 tabular-nums text-slate-500">{clips || <span className="text-slate-300">–</span>}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5 text-xs">
+                        {coords.length === 0
+                          ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">No regions yet</span>
+                          : <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">{coords.length} region{coords.length !== 1 ? 's' : ''} · p.{pages.join(', ')}</span>}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-1.5 text-xs">
+                        <span
+                          className={`rounded-full px-2 py-0.5 ${hasMsRegion ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}
+                          title="Where this question's answer is on the mark scheme"
+                        >
+                          {hasMsRegion ? '✓ region' : 'No region'}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="checkbox"
+                          aria-label={`Rank Q${questionLabel(q.question_number)} by comparison`}
+                          checked={q.marking_mode === 'comparative'}
+                          disabled={modeMutation.isPending}
+                          onChange={(e) => modeMutation.mutate({ q, comparative: e.target.checked })}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap text-xs">
+                          <button
+                            onClick={() => { setNotice(null); setClipper({ mode: 'edit', question: q }); }}
+                            disabled={noScripts}
+                            title={noScripts ? 'Upload a script first to draw on' : 'Draw or edit clip regions'}
+                            className="rounded bg-indigo-600 px-2.5 py-1.5 font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                          >
+                            {coords.length > 0 ? 'Edit regions' : 'Draw regions'}
+                          </button>
+                          {exam?.mark_scheme_pdf_url && (
+                            <button
+                              onClick={() => { setNotice(null); setClipper({ mode: 'mark-scheme', question: q }); }}
+                              title="Draw this question's region on the mark scheme"
+                              className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+                            >
+                              Mark scheme
+                            </button>
+                          )}
+                          <button
+                            onClick={() => startEditing(q)}
+                            className="rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => deleteQuestion(q)}
+                            className="rounded border border-red-200 bg-white px-2.5 py-1.5 font-medium text-red-600 hover:bg-red-50"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TableBox>
+        )}
+      </StepCard>
 
-          {questions.length === 0 && (
-            <div className="text-sm text-slate-500">No questions defined yet.</div>
-          )}
+      {/* 4. Generate clips */}
+      <StepCard
+        number={4} title="Generate clips" state={stateOf(4)} open={stepOpen(4)} onToggle={() => toggleStep(4)}
+        summary={
+          noScripts || questions.length === 0 ? 'Needs scripts (step 1) and questions (step 3) first'
+          : done[4] ? `All ${clipsWanted} clips ready`
+          : `${clipsMade} of ${clipsWanted} clips ready`
+        }
+      >
+        <p className="text-xs text-slate-500">
+          Cuts each question's answer out of every script (and the mark scheme image for each question), so teachers mark one answer at a time with names blacked out.
+          Generate Clips only cuts what is missing, so adding a few scripts or a question does not redo the whole class.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => void runClipping(undefined, true)}
+            disabled={clipBusy || questions.length === 0 || noScripts}
+            className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+            title={questions.length === 0 ? 'Define questions first' : 'Clip the scripts that have no clips yet'}
+          >
+            {clipBusy ? 'Clipping…' : 'Generate Clips'}
+          </button>
+          <button
+            onClick={() => {
+              if (window.confirm('Cut every script again, including the ones already clipped? This takes as long as the first time. '
+                + 'Clips you chose by hand are kept. Use it after changing question regions.')) void runClipping(undefined, false);
+            }}
+            disabled={clipBusy || questions.length === 0 || noScripts}
+            className="text-sm text-slate-500 underline hover:text-slate-700 disabled:opacity-50"
+            title="Clip every script again, not just the ones that have no clips yet"
+          >
+            Re-clip all
+          </button>
+          {exam?.status === 'marking' && <span className="text-xs text-green-700">Ready for marking</span>}
         </div>
-      )}
+        {clipJob && (
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <ClipRunPanel
+              state={clipRunner.state}
+              finishing={clipJob.finishing}
+              finished={clipJob.finished}
+              error={clipJob.error}
+              alreadyClipped={clipJob.alreadyClipped}
+              label={(sid) => `Student ${scripts.find((s) => s.id === sid)?.student_number ?? sid}`}
+              onPause={clipRunner.pause}
+              onResume={clipRunner.resume}
+              onDismiss={dismissClipJob}
+            />
+          </div>
+        )}
+      </StepCard>
 
-      {/* Assign teachers tab */}
-      {tab === 'assign' && (
+      {/* 5. Assign teachers */}
+      <StepCard
+        number={5} title="Assign teachers" state={stateOf(5)} open={stepOpen(5)} onToggle={() => toggleStep(5)}
+        summary={
+          questions.length === 0 ? 'Choose who marks which question'
+          : done[5] ? 'Every question has someone to mark it'
+          : `${unassigned} question${unassigned === 1 ? '' : 's'} nobody marks yet`
+        }
+      >
         <AssignTeachers examId={id!} teachers={teachers} questions={questions} assignments={assignments} markCombine={exam?.mark_combine ?? 'latest'} />
-      )}
+      </StepCard>
 
       {clipper && (
         <QuestionClipper
