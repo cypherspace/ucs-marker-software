@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type AiComparisonFilters } from '../api';
+import { saveBlob } from '../lib/saveFile';
 import { friendlyError } from '../lib/errors';
 import { HEAD, TableBox, TH } from './DataTable';
 import { Button, LinkButton } from './ui';
@@ -154,6 +155,7 @@ export function AiAnalysis({ examId }: { examId: string }) {
   const [direction, setDirection] = useState<'all' | 'ai_higher' | 'ai_lower'>('all');
   const [busy, setBusy] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [pdfBusy, setPdfBusy] = useState<string | null>(null);
 
   const filters: AiComparisonFilters = {
     combine: combine || undefined,
@@ -178,6 +180,18 @@ export function AiAnalysis({ examId }: { examId: string }) {
       setExportError(friendlyError(e).message);
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function scriptPdf(scriptIdToMake: string, kind: 'sheet' | 'annotated') {
+    setPdfBusy(kind); setExportError(null);
+    try {
+      const pdf = kind === 'sheet' ? await api.feedbackSheetPdf(scriptIdToMake) : await api.annotatedPdf(scriptIdToMake, false, true);
+      saveBlob(new Blob([pdf.bytes as BlobPart], { type: 'application/pdf' }), pdf.filename);
+    } catch (e) {
+      setExportError(friendlyError(e).message);
+    } finally {
+      setPdfBusy(null);
     }
   }
 
@@ -324,6 +338,13 @@ export function AiAnalysis({ examId }: { examId: string }) {
               </label>
               <button type="button" aria-label="Next script" disabled={oneIndex < 0 || oneIndex >= scripts.length - 1} onClick={() => setScriptId(scripts[oneIndex + 1].script_id)} className="rounded border border-slate-300 px-2 py-1 text-sm disabled:opacity-40">›</button>
               {oneIndex >= 0 && <span>Teachers {scripts[oneIndex].teacher_total}, AI {scripts[oneIndex].ai_total} of {scripts[oneIndex].max_total} (over the answers with both marks)</span>}
+              <span className="flex-1" />
+              <Button disabled={pdfBusy !== null || !oneId} onClick={() => void scriptPdf(oneId, 'sheet')} title="Marks, feedback and the teachers' notes for this script, to hand back">
+                {pdfBusy === 'sheet' ? 'Making…' : 'Feedback sheet (PDF)'}
+              </Button>
+              <Button disabled={pdfBusy !== null || !oneId} onClick={() => void scriptPdf(oneId, 'annotated')} title="The whole script with the marking drawn on and a feedback cover sheet in front">
+                {pdfBusy === 'annotated' ? 'Making…' : 'Script with cover sheet (PDF)'}
+              </Button>
             </div>
             <AnswerList rows={data.rows.filter((r) => r.script_id === oneId)} showScript={false} />
           </>

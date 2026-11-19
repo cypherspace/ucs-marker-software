@@ -59,12 +59,173 @@ def _draw(page: fitz.Page, op: dict[str, Any]) -> None:
         )
 
 
+# DejaVu Sans covers the symbols that turn up in science answers (degrees, mu, multiplication sign, arrows); the built-in
+# PDF fonts only cover Latin-1. It is installed in the container; without it the text falls back to Latin-1.
+_FONTS = {
+    False: ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVuSans.ttf", "C:/Windows/Fonts/arial.ttf"],
+    True: ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "DejaVuSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf"],
+}
+
+
+def _font_file(bold: bool) -> str | None:
+    for path in _FONTS[bold]:
+        if Path(path).exists():
+            return path
+    return None
+
+
+class _Text:
+    """Writes wrapped text onto new pages of a document, starting a new page when one is full."""
+
+    MARGIN = 56.0
+
+    def __init__(self, doc: fitz.Document, width: float, height: float) -> None:
+        self.doc, self.w, self.h = doc, width, height
+        self.page: fitz.Page | None = None
+        self.y = 0.0
+        self.fonts = {b: _font_file(b) for b in (False, True)}
+        self.measure = {b: (fitz.Font(fontfile=f) if f else fitz.Font("helv" if not b else "hebo")) for b, f in self.fonts.items()}
+
+    def _fix(self, text: str, bold: bool) -> str:
+        return text if self.fonts[bold] else _latin1(text)
+
+    def _new_page(self) -> None:
+        self.page = self.doc.new_page(width=self.w, height=self.h)
+        self.y = self.MARGIN
+
+    def _wrap(self, text: str, size: float, bold: bool) -> list[str]:
+        font, width = self.measure[bold], self.w - 2 * self.MARGIN
+        lines: list[str] = []
+        for para in text.split("\n"):
+            words, cur = para.split(" "), ""
+            for word in words:
+                trial = f"{cur} {word}" if cur else word
+                if font.text_length(trial, fontsize=size) <= width or not cur:
+                    cur = trial
+                else:
+                    lines.append(cur)
+                    cur = word
+            lines.append(cur)
+        return lines
+
+    def _put(self, page: fitz.Page, x: float, y: float, text: str, size: float, bold: bool, colour: tuple[float, float, float], rotate: int = 0) -> None:
+        kwargs: dict[str, Any] = {"fontsize": size, "color": colour, "rotate": rotate}
+        font_file = self.fonts[bold]
+        if font_file:
+            kwargs.update(fontname="djb" if bold else "dj", fontfile=font_file)
+        else:
+            kwargs.update(fontname="hebo" if bold else "helv")
+        page.insert_text(fitz.Point(x, y), self._fix(text, bold), **kwargs)
+
+    def _room(self, height: float) -> None:
+        """Start a new page unless `height` points fit on this one."""
+        if self.page is None or self.y + height > self.h - self.MARGIN:
+            self._new_page()
+
+    def line(self, text: str, size: float = 11, bold: bool = False, gap: float = 0.0, colour: tuple[float, float, float] = (0.15, 0.15, 0.15)) -> None:
+        text = self._fix(text, bold)
+        leading = size * 1.35
+        self.y += gap
+        for piece in self._wrap(text, size, bold):
+            self._room(leading)
+            self._put(self.page, self.MARGIN, self.y + size, piece, size, bold, colour)  # type: ignore[arg-type]
+            self.y += leading
+
+    _TONES = {"good": (0.09, 0.64, 0.29), "mid": (0.85, 0.47, 0.02), "low": (0.86, 0.15, 0.15)}
+    _DEFAULT = (0.31, 0.27, 0.9)
+
+    def chart(self, spec: dict[str, Any]) -> None:
+        """A horizontal bar chart (one row per item) or a column chart (one column per item), drawn as vector shapes."""
+        items = spec.get("items", [])
+        if not items:
+            return
+        unit = str(spec.get("unit", ""))
+        width = self.w - 2 * self.MARGIN
+        self.y += 6
+        if spec.get("kind") == "columns":
+            height = 120.0
+            self._room(height + 40)
+            page = self.page
+            assert page is not None
+            top = self.y + 14
+            gap = 4.0
+            col = (width - gap * (len(items) - 1)) / len(items)
+            peak = max(float(i.get("max") or 1) for i in items)
+            for n, item in enumerate(items):
+                x = self.MARGIN + n * (col + gap)
+                h = height * min(1.0, float(item.get("value", 0)) / peak)
+                colour = self._TONES.get(item.get("tone"), self._DEFAULT)
+                if h > 0:
+                    page.draw_rect(fitz.Rect(x, top + height - h, x + col, top + height), color=None, fill=colour)
+                self._put(page, x + col / 2 - 3 * len(str(int(item.get("value", 0)))), top + height - h - 3, str(int(item.get("value", 0))), 8, False, (0.3, 0.3, 0.3))
+                self._put(page, x, top + height + 11, str(item.get("label", "")), 8, False, (0.4, 0.4, 0.4))
+            page.draw_line(fitz.Point(self.MARGIN, top + height), fitz.Point(self.MARGIN + width, top + height), color=(0.6, 0.6, 0.6), width=0.6)
+            self.y = top + height + 18
+            if spec.get("caption"):
+                self.line(str(spec["caption"]), size=8.5, colour=(0.4, 0.4, 0.4))
+            return
+        label_w, value_w, row = 118.0, 40.0, 15.0
+        bar_w = width - label_w - value_w
+        for item in items:
+            self._room(row)
+            page = self.page
+            assert page is not None
+            frac = max(0.0, min(1.0, float(item.get("value", 0)) / float(item.get("max") or 100)))
+            colour = self._TONES.get(item.get("tone"), self._DEFAULT)
+            self._put(page, self.MARGIN, self.y + 10, str(item.get("label", ""))[:26], 9, False, (0.2, 0.2, 0.2))
+            page.draw_rect(fitz.Rect(self.MARGIN + label_w, self.y + 2, self.MARGIN + label_w + bar_w, self.y + row - 3), color=None, fill=(0.93, 0.94, 0.96))
+            if frac > 0:
+                page.draw_rect(fitz.Rect(self.MARGIN + label_w, self.y + 2, self.MARGIN + label_w + bar_w * frac, self.y + row - 3), color=None, fill=colour)
+            self._put(page, self.MARGIN + label_w + bar_w + 6, self.y + 10, f"{round(float(item.get('value', 0)))}{unit}", 9, True, (0.2, 0.2, 0.2))
+            self.y += row
+        self.y += 4
+
+
+def _subset(doc: fitz.Document) -> None:
+    """Keep only the glyphs used from the embedded font, so a text page does not carry the whole font (hundreds of KB)."""
+    try:
+        doc.subset_fonts()
+    except Exception:  # an older PyMuPDF, or a font that cannot be subset: the file is just larger
+        pass
+
+
+def write_blocks(doc: fitz.Document, title: str, blocks: list[dict[str, Any]], width: float, height: float) -> None:
+    """Add pages with a title and blocks of {heading, paragraphs: [{label, text}]}."""
+    t = _Text(doc, width, height)
+    t.line(title, size=18, bold=True, colour=(0.1, 0.1, 0.1))
+    for block in blocks:
+        t.line(str(block.get("heading", "")), size=13, bold=True, gap=14)
+        for para in block.get("paragraphs", []):
+            label = para.get("label")
+            if label:
+                t.line(str(label), size=10, bold=True, gap=6, colour=(0.35, 0.35, 0.35))
+            t.line(str(para.get("text", "")), size=11)
+        if block.get("chart"):
+            t.chart(block["chart"])
+
+
+def text_document(title: str, blocks: list[dict[str, Any]]) -> bytes:
+    """A standalone A4 PDF of the same blocks (no source script)."""
+    doc = fitz.open()
+    try:
+        a4 = fitz.paper_rect("a4")
+        write_blocks(doc, title, blocks, a4.width, a4.height)
+        if len(doc) == 0:
+            doc.new_page(width=a4.width, height=a4.height)
+        _subset(doc)
+        return doc.tobytes(garbage=3, deflate=True)
+    finally:
+        doc.close()
+
+
 def annotate_pdf(
     pdf_path: Path,
     ops: list[dict[str, Any]],
     redact_zones: list[dict[str, Any]],
     cover_title: str | None,
     cover_lines: list[str],
+    sheet_title: str | None = None,
+    sheet_blocks: list[dict[str, Any]] | None = None,
 ) -> bytes:
     doc = fitz.open(str(pdf_path))
     try:
@@ -83,8 +244,17 @@ def annotate_pdf(
             if 0 <= n < len(doc):
                 _draw(doc[n], op)
 
-        if cover_title:
-            first = doc[0].rect if len(doc) else fitz.paper_rect("a4")
+        first = doc[0].rect if len(doc) else fitz.paper_rect("a4")
+        if sheet_blocks:
+            # A feedback sheet in front of the script (replaces the plain summary page), the size of the script's first page
+            sheet = fitz.open()
+            try:
+                write_blocks(sheet, sheet_title or "", sheet_blocks, first.width, first.height)
+                doc.insert_pdf(sheet, start_at=0)
+            finally:
+                sheet.close()
+            _subset(doc)
+        elif cover_title:
             cover = doc.new_page(pno=0, width=first.width, height=first.height)
             y = 72.0
             cover.insert_text(fitz.Point(60, y), _latin1(cover_title), fontsize=20, fontname="hebo", color=(0.1, 0.1, 0.1))

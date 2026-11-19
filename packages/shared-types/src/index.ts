@@ -746,3 +746,39 @@ export interface AiComparison {
   };
   rows: AiCmpRow[];
 }
+
+// ─── Class feedback summary (lead teacher / admin) ───────────────────────────
+
+export type ClassTone = 'good' | 'mid' | 'low';
+export interface ClassQuestionFigures {
+  question_id: string;
+  label: string;
+  max_marks: number;
+  n: number;
+  average: number;
+  facility_pct: number;
+  tone: ClassTone;
+  ai_only: number;
+  distribution: number[] | null;
+}
+export interface ClassFiguresData {
+  scripts: number;
+  answers: number;
+  ai_only_answers: number;
+  overall_pct: number | null;
+  histogram: { from: number; to: number; count: number }[];
+  by_question: ClassQuestionFigures[];
+  strengths: ClassQuestionFigures[];
+  weaknesses: ClassQuestionFigures[];
+  by_class: { label: string; scripts: number; average_pct: number }[];
+}
+export interface ClassFeedback {
+  combine: MarkCombine;
+  figures: ClassFiguresData;
+  classes: string[];
+  /** Questions with AI feedback text, and how many answers have it */
+  feedback_counts: Record<string, number>;
+  ai_configured: boolean;
+}
+export interface ClassThemes { strengths: string[]; weaknesses: string[] }
+export interface ClassOverall extends ClassThemes { next_steps: string[] }

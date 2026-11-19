@@ -22,7 +22,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from pipeline.storage import storage
-from pipeline.annotate import annotate_pdf
+from pipeline.annotate import annotate_pdf, text_document
 from pipeline.student_clipper import clip_question, render_page
 from pipeline.text_render import render_text_page
 
@@ -125,6 +125,14 @@ class AnnotateRequest(BaseModel):
     # A summary page put in front of the script
     cover_title: str | None = None
     cover_lines: list[str] = []
+    # A feedback sheet put in front of the script instead of the plain summary page: blocks of {heading, paragraphs: [{label, text}]}
+    sheet_title: str | None = None
+    sheet_blocks: list[dict[str, Any]] = []
+
+
+class TextDocumentRequest(BaseModel):
+    title: str
+    blocks: list[dict[str, Any]] = []
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +438,17 @@ def render(req: RenderRequest):
     )
 
 
+@app.post("/text-document")
+def text_document_endpoint(req: TextDocumentRequest):
+    """A PDF made of text blocks (a title, then headings with labelled paragraphs), for example one script's AI comments."""
+    try:
+        data = text_document(req.title, req.blocks)
+    except Exception as exc:
+        logger.error("text_document failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Making the document failed: {exc}")
+    return Response(content=data, media_type="application/pdf")
+
+
 @app.post("/annotate-script")
 def annotate_script(req: AnnotateRequest):
     """Draw a teacher's annotations onto the original script PDF and return the new PDF.
@@ -443,7 +462,7 @@ def annotate_script(req: AnnotateRequest):
         logger.error("annotate: cannot access PDF: %s", exc)
         raise HTTPException(status_code=422, detail=f"Cannot access PDF: {exc}")
     try:
-        data = annotate_pdf(pdf_path, req.ops, req.redact_zones, req.cover_title, req.cover_lines)
+        data = annotate_pdf(pdf_path, req.ops, req.redact_zones, req.cover_title, req.cover_lines, req.sheet_title, req.sheet_blocks)
     except Exception as exc:
         logger.error("annotate_pdf failed uri=%s: %s", req.pdf_uri, exc)
         raise HTTPException(status_code=500, detail=f"Annotating failed: {exc}")

@@ -164,3 +164,50 @@ export function markStamp(first: Region, label: string, text: string): DrawOp[] 
 }
 
 export const safeFilePart = (s: string): string => s.replace(/[^\w .()-]+/g, '').trim().slice(0, 80) || 'script';
+
+// ── A feedback sheet for one script, to hand back: marks, the AI's feedback and the teachers' notes ─────────────────
+
+export interface SheetRow {
+  question_number: string;
+  max_marks: number;
+  /** The mark that counts (a teacher's, else the AI's); null if nobody has marked the answer */
+  mark: number | null;
+  mark_source: string | null;
+  ai_feedback: string | null;
+  ai_reasoning: string | null;
+  teacher_notes: string[];
+}
+
+export interface TextBlock { heading: string; paragraphs: { label?: string; text: string }[] }
+
+export interface SheetOptions {
+  /** Include the AI's reasoning (usually written for the marker, so off by default) */
+  reasoning?: boolean;
+}
+
+/** Blocks for the sheet: a summary with the total, then one block per answer. Empty when there is nothing to show. */
+export function feedbackSheetBlocks(
+  rows: SheetRow[], label: (questionNumber: string) => string, order: (rows: SheetRow[]) => SheetRow[], intro: string, opts: SheetOptions = {},
+): TextBlock[] {
+  const ordered = order(rows);
+  if (ordered.length === 0) return [];
+  const marked = ordered.filter((r) => r.mark !== null);
+  const total = marked.reduce((a, r) => a + r.mark!, 0);
+  const possible = marked.reduce((a, r) => a + r.max_marks, 0);
+  const aiOnly = marked.some((r) => r.mark_source === 'ai');
+  const summary: TextBlock['paragraphs'] = [
+    { label: 'Total', text: marked.length ? `${total} / ${possible}${marked.length < ordered.length ? ` (${marked.length} of ${ordered.length} questions marked so far)` : ''}` : 'Not marked yet' },
+  ];
+  if (aiOnly) summary.push({ text: 'Marks shown as "AI" are suggestions from an AI where a teacher has not yet marked the answer.' });
+  return [
+    { heading: intro, paragraphs: summary },
+    ...ordered.map((r): TextBlock => {
+      const mark = r.mark === null ? 'not marked' : `${r.mark} / ${r.max_marks}${r.mark_source === 'ai' ? ' (AI)' : ''}`;
+      const paragraphs: TextBlock['paragraphs'] = [];
+      if (r.ai_feedback?.trim()) paragraphs.push({ label: 'Feedback', text: r.ai_feedback.trim() });
+      r.teacher_notes.forEach((n) => paragraphs.push({ label: "Teacher's note", text: n }));
+      if (opts.reasoning && r.ai_reasoning?.trim()) paragraphs.push({ label: 'How the AI marked it', text: r.ai_reasoning.trim() });
+      return { heading: `Q${label(r.question_number)}: ${mark}`, paragraphs };
+    }),
+  ];
+}

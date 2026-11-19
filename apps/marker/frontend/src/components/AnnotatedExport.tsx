@@ -6,14 +6,17 @@ import { saveBlob } from '../lib/saveFile';
 
 // "Download every script" as a zip of annotated PDFs, fetched one at a time (a whole class is too much for one request).
 // Lead teacher or admin only. `classGroup`: undefined = every script, null = scripts with no class, a string = that class.
-export function AnnotatedExport({ examId, classGroup, names, onNames }: {
+export function AnnotatedExport({ examId, classGroup, names, onNames, cover, onCover }: {
   examId: string; classGroup: string | null | undefined; names: boolean; onNames: (v: boolean) => void;
+  /** Put a feedback sheet (marks, feedback, teachers' notes) in front of each script, instead of the plain summary page */
+  cover: boolean; onCover: (v: boolean) => void;
 }) {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const cancel = useRef(false);
 
-  async function run() {
+  // kind 'annotated': every script with the marking drawn on. kind 'sheet': only the feedback sheet, one PDF per script.
+  async function run(kind: 'annotated' | 'sheet') {
     setMessage(null);
     cancel.current = false;
     try {
@@ -25,12 +28,12 @@ export function AnnotatedExport({ examId, classGroup, names, onNames }: {
       const parts: Uint8Array[] = [];
       const zip = new Zip((err, chunk) => { if (!err) parts.push(chunk); });
       const failed: string[] = [];
-      let done = 0;
+            let done = 0;
       setProgress({ done, total: scripts.length });
       for (const s of scripts) {
         if (cancel.current) break;
         try {
-          const pdf = await api.annotatedPdf(s.id, names);
+          const pdf = kind === 'sheet' ? await api.feedbackSheetPdf(s.id, names) : await api.annotatedPdf(s.id, names, cover);
           const entry = new ZipPassThrough(pdf.filename); // PDFs are already compressed
           zip.add(entry);
           entry.push(pdf.bytes, true);
@@ -42,11 +45,10 @@ export function AnnotatedExport({ examId, classGroup, names, onNames }: {
       zip.end();
       if (cancel.current) { setMessage('Cancelled.'); return; }
       if (failed.length === scripts.length) { setMessage(`No script could be exported. ${failed[0]}`); return; }
-      const label = `${plan.exam_name.replace(/[^\w .-]+/g, '').trim() || 'Exam'} - annotated scripts`;
+      const label = `${plan.exam_name.replace(/[^\w .-]+/g, '').trim() || 'Exam'} - ${kind === 'sheet' ? 'feedback sheets' : cover ? 'scripts with feedback' : 'annotated scripts'}`;
       saveBlob(new Blob(parts as BlobPart[], { type: 'application/zip' }), `${label}.zip`);
-      setMessage(failed.length
-        ? `Downloaded ${scripts.length - failed.length} of ${scripts.length}. Could not make: ${failed.join('; ')}`
-        : `Downloaded ${scripts.length} script${scripts.length === 1 ? '' : 's'}.`);
+      const made = scripts.length - failed.length;
+      setMessage(`Downloaded ${made} script${made === 1 ? '' : 's'}.${failed.length ? ` Could not make: ${failed.join('; ')}` : ''}`);
     } catch (e) {
       setMessage((e as Error).message);
     } finally {
@@ -60,12 +62,16 @@ export function AnnotatedExport({ examId, classGroup, names, onNames }: {
         <div className="min-w-0 flex-1">
           <div className="font-medium text-slate-800">Annotated scripts</div>
           <p className="text-xs text-slate-500">
-            The whole script as a PDF with each teacher's ticks, notes and marks drawn on, plus a summary page. Use "PDF" on a row for one script.
+            The whole script as a PDF with each teacher's ticks, notes and marks drawn on, plus a summary page. Tick "Feedback cover sheet" to put the marks, feedback and teachers' notes in front instead, ready to hand back. Use the buttons on a row for one script.
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input type="checkbox" checked={names} onChange={(e) => onNames(e.target.checked)} disabled={progress !== null} />
           Include student names
+        </label>
+        <label className="flex items-center gap-2 text-sm text-slate-700" title="A cover sheet in front of each script with the marks per question, the feedback and the teachers' notes">
+          <input type="checkbox" checked={cover} onChange={(e) => onCover(e.target.checked)} disabled={progress !== null} />
+          Feedback cover sheet
         </label>
         {progress ? (
           <>
@@ -73,7 +79,10 @@ export function AnnotatedExport({ examId, classGroup, names, onNames }: {
             <Button onClick={() => { cancel.current = true; }}>Cancel</Button>
           </>
         ) : (
-          <Button variant="primary" onClick={() => void run()}>Download all (zip)</Button>
+          <>
+            <Button onClick={() => void run('sheet')} title="One short PDF per script to hand back: marks per question, feedback and the teachers' notes">Feedback sheets only (zip)</Button>
+            <Button variant="primary" onClick={() => void run('annotated')}>Download all (zip)</Button>
+          </>
         )}
       </div>
       {!names && <p className="mt-2 text-xs text-slate-500">Name zones are removed from the pages. A name written anywhere else on a script stays visible.</p>}

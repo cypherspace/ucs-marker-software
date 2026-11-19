@@ -110,3 +110,36 @@ describe('markStamp', () => {
     expect((ops[0] as { y: number }).y).toBeGreaterThanOrEqual(2);
   });
 });
+
+import { feedbackSheetBlocks, type SheetRow } from './scriptExport.js';
+
+describe('feedbackSheetBlocks', () => {
+  const r = (o: Partial<SheetRow>): SheetRow => ({ question_number: '1', max_marks: 4, mark: 3, mark_source: 'human', ai_feedback: 'Good working', ai_reasoning: 'why', teacher_notes: [], ...o });
+  const lab = (n: string) => `(${n})`;
+  const keep = (rows: SheetRow[]) => rows;
+
+  it('is empty for a script with no answers', () => {
+    expect(feedbackSheetBlocks([], lab, keep, 'x')).toEqual([]);
+  });
+  it('starts with the total and one block per answer', () => {
+    const b = feedbackSheetBlocks([r({}), r({ question_number: '2', mark: 1, max_marks: 2 })], lab, keep, 'Mocks, class 10A');
+    expect(b[0]).toEqual({ heading: 'Mocks, class 10A', paragraphs: [{ label: 'Total', text: '4 / 6' }] });
+    expect(b.map((x) => x.heading)).toEqual(['Mocks, class 10A', 'Q(1): 3 / 4', 'Q(2): 1 / 2']);
+  });
+  it("shows feedback and the teachers' notes, but not the AI's reasoning unless asked", () => {
+    const rows = [r({ teacher_notes: ['check units'] })];
+    expect(feedbackSheetBlocks(rows, lab, keep, 'x')[1].paragraphs).toEqual([{ label: 'Feedback', text: 'Good working' }, { label: "Teacher's note", text: 'check units' }]);
+    expect(feedbackSheetBlocks(rows, lab, keep, 'x', { reasoning: true })[1].paragraphs.map((p) => p.label)).toEqual(['Feedback', "Teacher's note", 'How the AI marked it']);
+  });
+  it('marks an AI-only mark as such and says what that means', () => {
+    const b = feedbackSheetBlocks([r({ mark_source: 'ai' })], lab, keep, 'x');
+    expect(b[1].heading).toBe('Q(1): 3 / 4 (AI)');
+    expect(b[0].paragraphs[1].text).toMatch(/suggestions from an AI/);
+  });
+  it('copes with unmarked answers and keeps the order given', () => {
+    const b = feedbackSheetBlocks([r({ question_number: '2', mark: null, mark_source: null, ai_feedback: null }), r({})], lab, (x) => [...x].reverse(), 'x');
+    expect(b[0].paragraphs[0].text).toBe('3 / 4 (1 of 2 questions marked so far)');
+    expect(b.map((x) => x.heading)).toEqual(['x', 'Q(1): 3 / 4', 'Q(2): not marked']);
+    expect(b[2].paragraphs).toEqual([]);
+  });
+});
