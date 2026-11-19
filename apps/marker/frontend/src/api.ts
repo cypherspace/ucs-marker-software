@@ -2,7 +2,7 @@ import type {
   ApiSuccess, AssignedQuestion, AuthMe, Exam, ExamDeletePreview, ExamQuestion, ExamResults, StudentScript, ScriptClip,
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
-  QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
+  AiComparison, QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
   ComparativeStatus, ComparativeNextPair, Ranking, ClipSettings, ClipRegion, NameZone, ClipListItem,
   MarkCombine, QuestionAgreement, OverlayData, OverlayListItem,
   PracticeSetSummary, PracticeSetDetail, PracticeResults, StudentSetListItem, StudentSetView, StudentItemView, PracticeReveal, StudentSummary,
@@ -37,6 +37,23 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 const A = '/api/v1';
+
+export interface AiComparisonFilters {
+  combine?: MarkCombine;
+  classGroup?: string | null;
+  excludeConflicts?: boolean;
+  minGap?: number;
+}
+function comparisonQuery(f: AiComparisonFilters, extra: Record<string, string> = {}): string {
+  const q = new URLSearchParams(extra);
+  if (f.combine) q.set('combine', f.combine);
+  if (f.classGroup === null) q.set('no_class', '1');
+  else if (f.classGroup) q.set('class', f.classGroup);
+  if (f.excludeConflicts) q.set('exclude_conflicts', '1');
+  if (f.minGap) q.set('min_gap', String(f.minGap));
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
 const ADM = '/admin/v1';
 
 export const api = {
@@ -380,6 +397,11 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ...settings, guidance: settings.guidance || undefined, clip_ids: clipIds }),
     }),
+  // How the AI's marks compare with the teachers' (lead teacher / admin). `classGroup`: a name, null for no class, undefined for all.
+  aiComparison: (examId: string, f: AiComparisonFilters = {}) =>
+    http<ApiSuccess<AiComparison>>(`${A}/exams/${examId}/ai-comparison${comparisonQuery(f)}`),
+  aiComparisonExport: (examId: string, format: 'answers' | 'questions', f: AiComparisonFilters = {}) =>
+    http<ApiSuccess<{ csv: string; filename: string }>>(`${A}/exams/${examId}/ai-comparison/export${comparisonQuery(f, { format })}`),
   aiResults: (examId: string, questionId: string) =>
     http<ApiSuccess<AiResults>>(`${A}/exams/${examId}/ai-results?question_id=${questionId}`),
 
