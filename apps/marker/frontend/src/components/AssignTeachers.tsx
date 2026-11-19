@@ -132,7 +132,7 @@ export function AssignTeachers({ examId, teachers, questions, assignments, markC
           </div>
         </div>
         {teachers.length === 0 ? (
-          <p className="p-4 text-sm text-slate-500">No teachers yet. Invite staff from the Admin page.</p>
+          <p className="p-4 text-sm text-slate-500">No teachers yet. Invite staff from the System Admin page.</p>
         ) : (
           <ul className="grid max-h-60 gap-x-4 overflow-auto p-2 sm:grid-cols-2 lg:grid-cols-3">
             {teachers.map((t) => (

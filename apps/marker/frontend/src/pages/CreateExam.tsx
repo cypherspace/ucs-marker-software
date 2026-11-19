@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { NAV } from '../lib/navLabels';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
@@ -7,7 +8,7 @@ import { useBackTarget } from '../lib/nav';
 
 export function CreateExam() {
   const navigate = useNavigate();
-  const backTarget = useBackTarget({ to: '/exams', label: 'Exams' });
+  const backTarget = useBackTarget({ to: '/exams', label: NAV.examAdmin });
   const qc = useQueryClient();
   const [form, setForm] = useState({
     name: '',
@@ -46,8 +47,8 @@ export function CreateExam() {
     <div className="p-6 max-w-lg">
       <PageHeader
         title="New exam"
-        crumbs={[{ label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' }, { label: 'New exam' }]}
-        back={{ to: '/exams', label: 'Exams' }}
+        crumbs={[{ label: 'Home', to: '/' }, { label: NAV.examAdmin, to: '/exams' }, { label: NAV.newExam }]}
+        back={{ to: '/exams', label: NAV.examAdmin }}
         subtitle="Give the paper a name. You'll upload the scripts and mark out the questions next."
       />
       <form

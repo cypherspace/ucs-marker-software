@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { NAV } from '../lib/navLabels';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
@@ -60,7 +61,7 @@ export function PracticeSetDetail() {
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
       <PageHeader
         title={d.set.name}
-        crumbs={[{ label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' }, { label: 'Exam', to: `/exams/${d.set.exam_id}/practice` }, { label: d.set.name }]}
+        crumbs={[{ label: 'Home', to: '/' }, { label: NAV.examAdmin, to: '/exams' }, { label: 'Exam', to: `/exams/${d.set.exam_id}/practice` }, { label: d.set.name }]}
         back={{ to: `/exams/${d.set.exam_id}/practice`, label: 'Student practice' }}
         subtitle={`${d.set.items} clips · ${d.set.students} student${d.set.students === 1 ? '' : 's'} joined · ${d.set.submitted} marks submitted${d.set.closed_at ? ' · closed' : ''}`}
       />

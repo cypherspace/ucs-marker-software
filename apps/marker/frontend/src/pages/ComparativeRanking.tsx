@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { NAV } from '../lib/navLabels';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, HttpError } from '../api';
@@ -91,7 +92,7 @@ export function ComparativeRanking() {
       <PageHeader
         title={`Ranking: ${examQ.data?.data.name ?? ''}`}
         crumbs={[
-          { label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' },
+          { label: 'Home', to: '/' }, { label: NAV.examAdmin, to: '/exams' },
           { label: examQ.data?.data.name ?? 'Exam', to: `/exams/${examId}` }, { label: 'Ranking' },
         ]}
         back={{ to: `/exams/${examId}`, label: 'Progress' }}

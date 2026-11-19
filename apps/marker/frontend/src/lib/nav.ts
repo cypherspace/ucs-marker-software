@@ -1,4 +1,5 @@
 import { useLocation } from 'react-router-dom';
+import { NAV } from './navLabels';
 
 // Every in-app link remembers the page it was clicked on (react-router location state), so a
 // page's Back button can return to where the person actually came from rather than to a fixed
@@ -13,13 +14,13 @@ const MAX_CHAIN = 8;
 /** A human label for an in-app path, used for "Back to …". */
 export function pathLabel(path: string): string {
   const p = path.split('?')[0].replace(/\/+$/, '') || '/';
-  if (p === '/') return 'Home';
-  if (p === '/exams') return 'Exams';
-  if (p === '/exams/new') return 'New exam';
-  if (p === '/marking' || p === '/my-exams') return 'Marking';
-  if (p === '/marking/ai' || /^\/marking\/ai\//.test(p)) return 'AI marking';
-  if (p === '/marking/comparative') return 'Comparative ranking';
-  if (p === '/admin') return 'Admin';
+  if (p === '/') return NAV.home;
+  if (p === '/exams') return NAV.examAdmin;
+  if (p === '/exams/new') return NAV.newExam;
+  if (p === '/marking' || p === '/my-exams') return NAV.marking;
+  if (p === '/marking/ai' || /^\/marking\/ai\//.test(p)) return NAV.aiMarking;
+  if (p === '/marking/comparative') return NAV.comparative;
+  if (p === '/admin') return NAV.systemAdmin;
   if (/^\/exams\/[^/]+\/setup$/.test(p)) return 'Setup';
   if (/^\/exams\/[^/]+\/results$/.test(p)) return 'Results';
   if (/^\/exams\/[^/]+\/upload$/.test(p)) return 'Upload scripts';
@@ -28,7 +29,7 @@ export function pathLabel(path: string): string {
   if (/^\/exams\/[^/]+(\/progress)?$/.test(p)) return 'Exam';
   if (/^\/compare\/[^/]+\/[^/]+\/ranking$/.test(p)) return 'Ranking';
   if (/^\/compare\//.test(p)) return 'Comparisons';
-  if (/^\/mark\//.test(p)) return 'Marking';
+  if (/^\/mark\//.test(p)) return NAV.marking;
   return 'previous page';
 }
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { NAV } from '../lib/navLabels';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 import { ListControls, SearchBox, Segmented, SortSelect } from '../components/ListControls';
@@ -29,7 +30,7 @@ export function ExamList() {
   return (
     <div className="max-w-4xl p-4 sm:p-6">
       <PageHeader
-        title="Exams"
+        title={NAV.examAdmin}
         crumbs={[{ label: 'Home', to: '/' }]}
         subtitle="Set up papers, follow marking progress and export results."
         actions={<LinkButton to="/exams/new" variant="primary">New exam</LinkButton>}

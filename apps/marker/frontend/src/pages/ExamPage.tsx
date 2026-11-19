@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { NAV } from '../lib/navLabels';
 import { Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { ExamMenu } from '../components/ExamMenu';
@@ -33,8 +34,8 @@ export function ExamPage() {
     <div className="max-w-6xl p-4 sm:p-6">
       <PageHeader
         title={<span className="flex flex-wrap items-center gap-x-3 gap-y-1">{exam.name} <StatusPill status={exam.status} /></span>}
-        crumbs={[{ label: 'Home', to: '/' }, { label: 'Exams', to: '/exams' }, { label: exam.name }]}
-        back={{ to: '/exams', label: 'Exams' }}
+        crumbs={[{ label: 'Home', to: '/' }, { label: NAV.examAdmin, to: '/exams' }, { label: exam.name }]}
+        back={{ to: '/exams', label: NAV.examAdmin }}
         subtitle={details || undefined}
         actions={isLead ? <ExamMenu exam={exam} onDeleted={() => navigate('/exams')} /> : undefined}
       />

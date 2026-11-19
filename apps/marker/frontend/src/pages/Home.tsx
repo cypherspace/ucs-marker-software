@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { NAV } from '../lib/navLabels';
 import type { ReactNode } from 'react';
 import { api } from '../api';
 import { AppLink, Card, LinkButton, ProgressBar, StatusPill } from '../components/ui';
@@ -121,7 +122,7 @@ export function Home() {
 
         <HomeCard
           icon={<ExamIcon />}
-          title="Exams"
+          title={NAV.examAdmin}
           actions={
             <>
               <LinkButton to="/exams" variant="primary">All exams</LinkButton>
@@ -188,8 +189,8 @@ export function Home() {
         {admin && (
           <HomeCard
             icon={<StaffIcon />}
-            title="Staff and admin"
-            actions={<LinkButton to="/admin" variant="secondary">Manage staff</LinkButton>}
+            title={NAV.systemAdmin}
+            actions={<LinkButton to="/admin?tab=staff" variant="secondary">Manage staff</LinkButton>}
           >
             <p className="text-sm text-slate-500">Invite and remove teachers, and see who has marked what.</p>
             <p className="text-3xl font-semibold text-slate-800">

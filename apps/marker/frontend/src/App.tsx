@@ -1,7 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, HttpError } from './api';
+import { AppHeader } from './components/AppHeader';
+import { navEntries } from './lib/navEntries';
+import { useMarkingAccess } from './hooks/useMarkingAccess';
 import { Login } from './pages/Login';
 import { Home } from './pages/Home';
 import { Admin } from './pages/Admin';
@@ -89,22 +92,11 @@ export function App() {
   // Not signed in: the home page explains the service and offers sign-in; anywhere else goes to the sign-in page
   if (!me) return onHome ? <PublicHome /> : <div className="p-6 text-sm text-slate-500">Redirecting…</div>;
 
-  const isTeacherOrAdmin = me.role === 'admin' || me.role === 'teacher';
-
   // Students only ever see the practice pages (the server refuses them everything else too)
   if (me.role === 'student') {
     return (
       <div className="flex h-full flex-col">
-        <header className="flex flex-wrap items-center gap-x-4 gap-y-1 bg-indigo-700 px-4 py-2 text-white">
-          <h1 className="whitespace-nowrap text-lg font-semibold"><Link to="/practice" className="hover:opacity-90">UCS Marking</Link></h1>
-          <nav className="flex flex-wrap gap-x-3 text-sm whitespace-nowrap">
-            <NavLink to="/practice" end className={navCls}>Practice marking</NavLink>
-          </nav>
-          <div className="ml-auto flex items-center gap-3 whitespace-nowrap text-sm">
-            <span className="hidden opacity-90 sm:inline">{me.email}</span>
-            <button onClick={handleSignOut} className="rounded bg-indigo-800 px-2 py-1 text-xs hover:bg-indigo-900">Sign out</button>
-          </div>
-        </header>
+        <AppHeader email={me.email} role="student" entries={navEntries('student', { leadsAny: false, hasComparative: false })} onSignOut={handleSignOut} />
         <main className="min-h-0 flex-1 overflow-auto">
           <Routes>
             <Route path="/practice" element={<StudentHome />} />
@@ -120,22 +112,7 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-1 bg-indigo-700 px-4 py-2 text-white">
-        <h1 className="whitespace-nowrap text-lg font-semibold"><Link to="/" className="hover:opacity-90">UCS Marking</Link></h1>
-        <nav className="flex flex-wrap gap-x-3 text-sm whitespace-nowrap">
-          <NavLink to="/" end className={navCls}>Home</NavLink>
-          <NavLink to="/marking" className={navCls}>Marking</NavLink>
-          {isTeacherOrAdmin && <NavLink to="/exams" className={navCls}>Exams</NavLink>}
-          {me.role === 'admin' && <NavLink to="/admin" className={navCls}>Admin</NavLink>}
-        </nav>
-        <div className="ml-auto flex items-center gap-3 whitespace-nowrap text-sm">
-          <span className="hidden opacity-90 sm:inline">{me.email}</span>
-          <span className="rounded bg-indigo-600 px-2 py-0.5 text-xs">{me.role}</span>
-          <button onClick={handleSignOut} className="rounded bg-indigo-800 px-2 py-1 text-xs hover:bg-indigo-900">
-            Sign out
-          </button>
-        </div>
-      </header>
+      <StaffHeader email={me.email} role={me.role as 'admin' | 'teacher'} onSignOut={handleSignOut} />
       <main className="min-h-0 flex-1 overflow-auto">
         <Routes>
           <Route path="/" element={<Home />} />
@@ -165,7 +142,6 @@ export function App() {
           <Route path="/compare/:examId/:questionId" element={<ComparativeMarking />} />
           <Route path="/compare/:examId/:questionId/ranking" element={<ComparativeRanking />} />
           <Route path="/admin" element={<Admin />} />
-          <Route path="/login" element={<Login />} />
         </Routes>
       </main>
     </div>
@@ -179,6 +155,8 @@ function RedirectTo({ to }: { to: (params: Record<string, string | undefined>) =
   return <Navigate to={to(params)} replace state={loc.state} />;
 }
 
-function navCls({ isActive }: { isActive: boolean }) {
-  return isActive ? 'underline underline-offset-4' : 'opacity-80 hover:opacity-100';
+// The staff bar needs to know whether this person leads any exam (for AI marking) and whether comparative marking applies to them
+function StaffHeader({ email, role, onSignOut }: { email: string; role: 'admin' | 'teacher'; onSignOut: () => void }) {
+  const access = useMarkingAccess();
+  return <AppHeader email={email} role={role} entries={navEntries(role, access)} onSignOut={onSignOut} />;
 }
