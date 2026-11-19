@@ -81,6 +81,7 @@ class MsQuestionInput(BaseModel):
 
 class ClipMarkSchemeRequest(BaseModel):
     ms_pdf_url: str
+    ms_pdf_headers: dict[str, str] | None = None
     questions: list[MsQuestionInput]
 
 
@@ -327,7 +328,7 @@ def clip_mark_scheme(req: ClipMarkSchemeRequest):
     contain no student identifiers.
     """
     try:
-        pdf_path = _localise(req.ms_pdf_url)
+        pdf_path = _localise(req.ms_pdf_url, req.ms_pdf_headers)
     except Exception as exc:
         logger.error("Failed to localise mark scheme %s: %s", req.ms_pdf_url, exc)
         raise HTTPException(status_code=422, detail=f"Cannot access mark scheme PDF: {exc}")

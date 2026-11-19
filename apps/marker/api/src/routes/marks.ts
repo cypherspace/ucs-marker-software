@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
-import { storage } from '../services/storage.js';
 import { getClipBytes } from '../services/clipImages.js';
 import { convertedUrl } from '../services/converted.js';
 import { requireAuth } from '../middleware/requireAuth.js';
@@ -38,6 +37,10 @@ type ClipState = 'marked' | 'draft' | 'unmarked';
 // The URL the marking page loads a clip image from. The version changes when the pages are re-selected, so a cached image is never stale.
 const clipImageUrl = (id: string, reclippedAt: string | Date | null): string =>
   `/api/v1/clips/${id}/image?v=${reclippedAt ? new Date(reclippedAt).getTime() : 0}`;
+
+// Where the marking page loads a question's mark scheme image from (see the route below).
+const markSchemeImageUrl = (examId: string, questionId: string): string =>
+  `/api/v1/exams/${examId}/questions/${questionId}/mark-scheme-image`;
 
 // This teacher's clips for a question in a stable order (by script number, which markers
 // only ever see as a position), with how far along each one is for them.
@@ -116,11 +119,11 @@ router.get('/exams/:examId/queue/:questionId', requireAuth, async (req, res, nex
     // The clip image is served by this API (same origin), so the canvas can read it whatever the storage.
     const clipUrl = clipImageUrl(clip.id, clip.reclipped_at);
 
-    // Mark-scheme clip URL, if one was produced during clipping
-    let msUrl: string | null = null;
-    if (question?.ms_clip_image_url) {
-      msUrl = await storage.publicUrl(question.ms_clip_image_url);
-    }
+    // Mark-scheme clip, if one was produced during clipping: streamed by this API like the clip image,
+    // so it works whether the file is in the bucket or in Drive and the browser never gets a storage URL.
+    const msUrl = question?.ms_clip_image_url ? markSchemeImageUrl(question.exam_id, question.id) : null;
+    // The stored file location stays on the server
+    if (question) delete question.ms_clip_image_url;
 
     // The AI's mark for this clip, if any (shown only if the teacher asks for it)
     const ai = await db('script_marks')
@@ -288,6 +291,24 @@ router.get('/clips/:id/image', requireAuth, async (req, res, next) => {
     const clip = await requireClipAccess(req, res, req.params.id);
     if (!clip) return;
     const bytes = await getClipBytes(clip.clip_image_url, clip.lead_teacher_id);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.send(bytes);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// A question's mark scheme image, streamed by this API (same origin; the file may be in Drive or the bucket).
+// Anyone who may mark the question may see it; it holds no student data.
+router.get('/exams/:examId/questions/:questionId/mark-scheme-image', requireAuth, async (req, res, next) => {
+  try {
+    const access = await requireQuestionAccess(req, res, req.params.questionId, { examId: req.params.examId });
+    if (!access) return;
+    if (!access.ms_clip_image_url) {
+      res.status(404).json({ error: 'No mark scheme has been clipped for this question', code: 'NO_MARK_SCHEME' }); return;
+    }
+    const bytes = await getClipBytes(access.ms_clip_image_url, access.lead_teacher_id);
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'private, no-cache');
     res.send(bytes);

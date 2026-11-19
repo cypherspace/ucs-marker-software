@@ -322,11 +322,14 @@ async function clipMarkScheme(exam: ClipExam, questions: ClipQuestion[]): Promis
   }
   if (!withRegions.length) return { created: 0 };
   try {
+    // A mark scheme in Drive needs the lead teacher's token; one in the bucket needs nothing extra.
+    const { url: msPdfUrl, headers: msPdfHeaders } = await scriptPdfSource(exam.mark_scheme_pdf_url, exam.lead_teacher_id);
     const msResp = await extractorFetch('/clip-mark-scheme', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        ms_pdf_url: storage.rawUri(exam.mark_scheme_pdf_url),
+        ms_pdf_url: msPdfUrl,
+        ms_pdf_headers: msPdfHeaders,
         questions: withRegions.map((q) => ({ id: q.id, ms_clip_coordinates: q.ms_clip_coordinates })),
       }),
     });
@@ -517,7 +520,8 @@ router.get('/exams/:id/mark-scheme/render', requireAuth, requireRole(['teacher',
     if (!Number.isInteger(page) || page < 1) {
       res.status(400).json({ error: 'Invalid page', code: 'BAD_REQUEST' }); return;
     }
-    await sendRenderedPage(res, { pdfUri: storage.rawUri(exam.mark_scheme_pdf_url), page });
+    const { url: pdfUri, headers: pdfHeaders } = await scriptPdfSource(exam.mark_scheme_pdf_url, exam.lead_teacher_id);
+    await sendRenderedPage(res, { pdfUri, pdfHeaders, page });
   } catch (err) {
     next(err);
   }
