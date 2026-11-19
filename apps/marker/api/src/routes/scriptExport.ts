@@ -5,11 +5,12 @@ import { requireExamMember } from '../services/access.js';
 import { recordAudit } from '../services/audit.js';
 import { extractorFetch, describeExtractorFailure } from '../services/extractor.js';
 import { finalMarks } from '../services/finalMark.js';
+import { notesOf } from '../services/aiComparison.js';
 import { normaliseQuestionLabel as questionLabel } from '../services/questionLabel.js';
 import { scriptPdfSource } from '../services/scriptSource.js';
 import {
-  aiFeedbackBlocks, annotationOps, annotationsOf, markStamp, pdfSafeText, pickAnnotationRow, safeFilePart, stackRegions,
-  type AiFeedbackRow, type DrawOp, type MarkRow, type Region, type TextBlock,
+  feedbackSheetBlocks, annotationOps, annotationsOf, markStamp, pdfSafeText, pickAnnotationRow, safeFilePart, stackRegions,
+  type DrawOp, type MarkRow, type Region, type SheetRow, type TextBlock,
 } from '../services/scriptExport.js';
 import type { MarkCombine } from '../services/markCombine.js';
 import { sortByQuestionLabel } from '../services/questionLabel.js';
@@ -44,7 +45,7 @@ interface ClipRow {
 }
 
 // The script's pages with the annotations drawn on. includeNames=false redacts every known name zone first.
-async function buildPdf(script: ScriptInfo, includeNames: boolean, includeAi = false): Promise<{ bytes: Buffer; filename: string; notes: string[] }> {
+async function buildPdf(script: ScriptInfo, includeNames: boolean, withCover: { reasoning: boolean } | null = null): Promise<{ bytes: Buffer; filename: string; notes: string[] }> {
   const clips = await db('script_clips as sc')
     .join('exam_questions as eq', 'eq.id', 'sc.question_id')
     .leftJoin(finalMarks('fm', script.mark_combine), 'fm.clip_id', 'sc.id')
@@ -106,14 +107,14 @@ async function buildPdf(script: ScriptInfo, includeNames: boolean, includeAi = f
     'Ticks and marks are those of the mark that counts for each answer.',
   ];
 
-  const appendix = includeAi ? await aiBlocks(script) : [];
+  const sheet = withCover ? await sheetBlocks(script, includeNames, withCover.reasoning) : [];
   const { url: pdfUri, headers: pdfHeaders } = await scriptPdfSource(script.original_pdf_url, script.lead_teacher_id);
   const resp = await extractorFetch('/annotate-script', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       pdf_uri: pdfUri, pdf_headers: pdfHeaders, ops, redact_zones: redact, cover_title: who, cover_lines: cover,
-      ...(appendix.length ? { appendix_title: 'AI comments and feedback', appendix_blocks: appendix } : {}),
+      ...(sheet.length ? { sheet_title: 'Feedback', sheet_blocks: sheet } : {}),
     }),
   });
   if (!resp.ok) {
@@ -127,18 +128,26 @@ async function buildPdf(script: ScriptInfo, includeNames: boolean, includeAi = f
 
 class ExportError extends Error {}
 
-// The AI's marks, feedback and reasoning on this script, next to what the teachers decided, as text blocks
-async function aiBlocks(script: ScriptInfo): Promise<TextBlock[]> {
+// The feedback sheet for this script: the marks that count, the AI's feedback and the teachers' notes
+async function sheetBlocks(script: ScriptInfo, includeNames: boolean, reasoning: boolean): Promise<TextBlock[]> {
   const rows = await db('script_clips as sc')
     .join('exam_questions as eq', 'eq.id', 'sc.question_id')
-    .join('script_marks as ai', function joinAi() { this.on('ai.clip_id', 'sc.id').andOn(db.raw("ai.mark_source = 'ai'")); })
-    .leftJoin(finalMarks('fm', script.mark_combine, true), 'fm.clip_id', 'sc.id')
+    .leftJoin(finalMarks('fm', script.mark_combine), 'fm.clip_id', 'sc.id')
+    .leftJoin('script_marks as ai', function joinAi() { this.on('ai.clip_id', 'sc.id').andOn(db.raw("ai.mark_source = 'ai'")); })
     .where('sc.script_id', script.id)
-    .select<AiFeedbackRow[]>(
-      'eq.question_number', 'eq.max_marks', 'fm.marks_awarded as teacher_mark', 'ai.marks_awarded as ai_mark', 'ai.ai_feedback', 'ai.ai_reasoning',
+    .select<(SheetRow & { clip_id: string })[]>(
+      'sc.id as clip_id', 'eq.question_number', 'eq.max_marks', 'fm.marks_awarded as mark', 'fm.mark_source', 'ai.ai_feedback', 'ai.ai_reasoning',
     );
-  const intro = `${script.exam_name}${script.class_group ? `, class ${script.class_group}` : ''}`;
-  return aiFeedbackBlocks(rows, questionLabel, sortByQuestionLabel, intro);
+  const notes = rows.length
+    ? await db('script_marks').whereIn('clip_id', rows.map((x) => x.clip_id)).where({ mark_source: 'human' }).whereNot('status', 'pending')
+      .select<{ clip_id: string; annotation_data: unknown }[]>('clip_id', 'annotation_data')
+    : [];
+  const withNotes: SheetRow[] = rows.map((x) => ({
+    ...x, teacher_notes: notes.filter((n) => n.clip_id === x.clip_id).flatMap((n) => notesOf(n.annotation_data as never)),
+  }));
+  const who = includeNames && script.student_name ? `${script.student_name} (script ${script.student_number})` : `Script ${script.student_number}`;
+  const intro = `${script.exam_name}${script.class_group ? `, class ${script.class_group}` : ''}: ${who}`;
+  return feedbackSheetBlocks(withNotes, questionLabel, sortByQuestionLabel, intro, { reasoning });
 }
 
 // The scripts that can be exported, for the "download all" run (the browser fetches them one at a time)
@@ -162,16 +171,17 @@ router.get('/scripts/:scriptId/annotated.pdf', ...staff, async (req, res, next) 
     const script = await loadScript(req, res, req.params.scriptId);
     if (!script) return;
     const includeNames = req.query.names === '1';
-    const includeAi = req.query.ai === '1';
+    // ?cover=1: put the feedback sheet (marks, feedback, teachers' notes) in front of the script instead of the plain summary page
+    const cover = req.query.cover === '1' ? { reasoning: req.query.reasoning === '1' } : null;
     let out;
     try {
-      out = await buildPdf(script, includeNames, includeAi);
+      out = await buildPdf(script, includeNames, cover);
     } catch (err) {
       if (err instanceof ExportError) { res.status(502).json({ error: err.message, code: 'EXPORT_FAILED' }); return; }
       res.status(502).json({ error: `Could not reach the PDF maker: ${describeExtractorFailure(err)}`, code: 'EXTRACTOR_UNREACHABLE' }); return;
     }
     if (includeNames) await recordAudit(req, 'script.export_annotated_named', 'script', script.id, { exam_id: script.exam_id });
-    if (includeAi) await recordAudit(req, 'script.export_ai_feedback', 'script', script.id, { exam_id: script.exam_id, with_pdf: true });
+    if (cover) await recordAudit(req, 'script.export_feedback_sheet', 'script', script.id, { exam_id: script.exam_id, with_script: true, names: includeNames });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${out.filename.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(out.filename)}`);
     res.setHeader('Cache-Control', 'private, no-store');
@@ -179,28 +189,30 @@ router.get('/scripts/:scriptId/annotated.pdf', ...staff, async (req, res, next) 
   } catch (err) { next(err); }
 });
 
-// Only the AI's comments and feedback for one script, as a PDF of their own (script number only, never a name)
-router.get('/scripts/:scriptId/ai-feedback.pdf', ...staff, async (req, res, next) => {
+// The feedback sheet on its own, to hand back: marks, the AI's feedback and the teachers' notes for one script.
+// Script number only unless ?names=1 (which is recorded). ?reasoning=1 adds how the AI marked each answer.
+router.get('/scripts/:scriptId/feedback-sheet.pdf', ...staff, async (req, res, next) => {
   try {
     const script = await loadScript(req, res, req.params.scriptId);
     if (!script) return;
-    const blocks = await aiBlocks(script);
+    const includeNames = req.query.names === '1';
+    const blocks = await sheetBlocks(script, includeNames, req.query.reasoning === '1');
     if (blocks.length === 0) {
-      res.status(404).json({ error: 'The AI has not commented on any answer on this script yet.', code: 'NO_AI_FEEDBACK' }); return;
+      res.status(404).json({ error: 'This script has no answers yet, so there is nothing to put on a feedback sheet.', code: 'NO_FEEDBACK' }); return;
     }
     let resp: Awaited<ReturnType<typeof extractorFetch>>;
     try {
       resp = await extractorFetch('/text-document', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: `AI comments and feedback: Script ${script.student_number}`, blocks }),
+        body: JSON.stringify({ title: 'Feedback', blocks }),
       });
     } catch (err) {
       res.status(502).json({ error: `Could not reach the PDF maker: ${describeExtractorFailure(err)}`, code: 'EXTRACTOR_UNREACHABLE' }); return;
     }
     if (!resp.ok) { res.status(502).json({ error: `The PDF could not be made (${resp.status})`, code: 'EXPORT_FAILED' }); return; }
-    await recordAudit(req, 'script.export_ai_feedback', 'script', script.id, { exam_id: script.exam_id, with_pdf: false });
-    const filename = `${safeFilePart(`Script ${script.student_number}`)} AI feedback.pdf`;
+    await recordAudit(req, 'script.export_feedback_sheet', 'script', script.id, { exam_id: script.exam_id, with_script: false, names: includeNames });
+    const filename = `${safeFilePart(includeNames && script.student_name ? `${script.student_number} - ${script.student_name}` : `Script ${script.student_number}`)} feedback.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader('Cache-Control', 'private, no-store');

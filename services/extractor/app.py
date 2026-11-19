@@ -125,9 +125,9 @@ class AnnotateRequest(BaseModel):
     # A summary page put in front of the script
     cover_title: str | None = None
     cover_lines: list[str] = []
-    # Pages added at the end: blocks of {heading, paragraphs: [{label, text}]} (for example the AI's comments)
-    appendix_title: str | None = None
-    appendix_blocks: list[dict[str, Any]] = []
+    # A feedback sheet put in front of the script instead of the plain summary page: blocks of {heading, paragraphs: [{label, text}]}
+    sheet_title: str | None = None
+    sheet_blocks: list[dict[str, Any]] = []
 
 
 class TextDocumentRequest(BaseModel):
@@ -462,7 +462,7 @@ def annotate_script(req: AnnotateRequest):
         logger.error("annotate: cannot access PDF: %s", exc)
         raise HTTPException(status_code=422, detail=f"Cannot access PDF: {exc}")
     try:
-        data = annotate_pdf(pdf_path, req.ops, req.redact_zones, req.cover_title, req.cover_lines, req.appendix_title, req.appendix_blocks)
+        data = annotate_pdf(pdf_path, req.ops, req.redact_zones, req.cover_title, req.cover_lines, req.sheet_title, req.sheet_blocks)
     except Exception as exc:
         logger.error("annotate_pdf failed uri=%s: %s", req.pdf_uri, exc)
         raise HTTPException(status_code=500, detail=f"Annotating failed: {exc}")

@@ -108,21 +108,77 @@ class _Text:
             lines.append(cur)
         return lines
 
+    def _put(self, page: fitz.Page, x: float, y: float, text: str, size: float, bold: bool, colour: tuple[float, float, float], rotate: int = 0) -> None:
+        kwargs: dict[str, Any] = {"fontsize": size, "color": colour, "rotate": rotate}
+        font_file = self.fonts[bold]
+        if font_file:
+            kwargs.update(fontname="djb" if bold else "dj", fontfile=font_file)
+        else:
+            kwargs.update(fontname="hebo" if bold else "helv")
+        page.insert_text(fitz.Point(x, y), self._fix(text, bold), **kwargs)
+
+    def _room(self, height: float) -> None:
+        """Start a new page unless `height` points fit on this one."""
+        if self.page is None or self.y + height > self.h - self.MARGIN:
+            self._new_page()
+
     def line(self, text: str, size: float = 11, bold: bool = False, gap: float = 0.0, colour: tuple[float, float, float] = (0.15, 0.15, 0.15)) -> None:
         text = self._fix(text, bold)
         leading = size * 1.35
         self.y += gap
         for piece in self._wrap(text, size, bold):
-            if self.page is None or self.y + leading > self.h - self.MARGIN:
-                self._new_page()
-            kwargs: dict[str, Any] = {"fontsize": size, "color": colour}
-            font_file = self.fonts[bold]
-            if font_file:
-                kwargs.update(fontname="djb" if bold else "dj", fontfile=font_file)
-            else:
-                kwargs.update(fontname="hebo" if bold else "helv")
-            self.page.insert_text(fitz.Point(self.MARGIN, self.y + size), piece, **kwargs)
+            self._room(leading)
+            self._put(self.page, self.MARGIN, self.y + size, piece, size, bold, colour)  # type: ignore[arg-type]
             self.y += leading
+
+    _TONES = {"good": (0.09, 0.64, 0.29), "mid": (0.85, 0.47, 0.02), "low": (0.86, 0.15, 0.15)}
+    _DEFAULT = (0.31, 0.27, 0.9)
+
+    def chart(self, spec: dict[str, Any]) -> None:
+        """A horizontal bar chart (one row per item) or a column chart (one column per item), drawn as vector shapes."""
+        items = spec.get("items", [])
+        if not items:
+            return
+        unit = str(spec.get("unit", ""))
+        width = self.w - 2 * self.MARGIN
+        self.y += 6
+        if spec.get("kind") == "columns":
+            height = 120.0
+            self._room(height + 40)
+            page = self.page
+            assert page is not None
+            top = self.y + 14
+            gap = 4.0
+            col = (width - gap * (len(items) - 1)) / len(items)
+            peak = max(float(i.get("max") or 1) for i in items)
+            for n, item in enumerate(items):
+                x = self.MARGIN + n * (col + gap)
+                h = height * min(1.0, float(item.get("value", 0)) / peak)
+                colour = self._TONES.get(item.get("tone"), self._DEFAULT)
+                if h > 0:
+                    page.draw_rect(fitz.Rect(x, top + height - h, x + col, top + height), color=None, fill=colour)
+                self._put(page, x + col / 2 - 3 * len(str(int(item.get("value", 0)))), top + height - h - 3, str(int(item.get("value", 0))), 8, False, (0.3, 0.3, 0.3))
+                self._put(page, x, top + height + 11, str(item.get("label", "")), 8, False, (0.4, 0.4, 0.4))
+            page.draw_line(fitz.Point(self.MARGIN, top + height), fitz.Point(self.MARGIN + width, top + height), color=(0.6, 0.6, 0.6), width=0.6)
+            self.y = top + height + 18
+            if spec.get("caption"):
+                self.line(str(spec["caption"]), size=8.5, colour=(0.4, 0.4, 0.4))
+            return
+        label_w, value_w, row = 118.0, 40.0, 15.0
+        bar_w = width - label_w - value_w
+        for item in items:
+            self._room(row)
+            page = self.page
+            assert page is not None
+            frac = max(0.0, min(1.0, float(item.get("value", 0)) / float(item.get("max") or 100)))
+            colour = self._TONES.get(item.get("tone"), self._DEFAULT)
+            self._put(page, self.MARGIN, self.y + 10, str(item.get("label", ""))[:26], 9, False, (0.2, 0.2, 0.2))
+            page.draw_rect(fitz.Rect(self.MARGIN + label_w, self.y + 2, self.MARGIN + label_w + bar_w, self.y + row - 3), color=None, fill=(0.93, 0.94, 0.96))
+            if frac > 0:
+                page.draw_rect(fitz.Rect(self.MARGIN + label_w, self.y + 2, self.MARGIN + label_w + bar_w * frac, self.y + row - 3), color=None, fill=colour)
+            self._put(page, self.MARGIN + label_w + bar_w + 6, self.y + 10, f"{round(float(item.get('value', 0)))}{unit}", 9, True, (0.2, 0.2, 0.2))
+            self.y += row
+        self.y += 4
 
 
 def _subset(doc: fitz.Document) -> None:
@@ -144,6 +200,8 @@ def write_blocks(doc: fitz.Document, title: str, blocks: list[dict[str, Any]], w
             if label:
                 t.line(str(label), size=10, bold=True, gap=6, colour=(0.35, 0.35, 0.35))
             t.line(str(para.get("text", "")), size=11)
+        if block.get("chart"):
+            t.chart(block["chart"])
 
 
 def text_document(title: str, blocks: list[dict[str, Any]]) -> bytes:
@@ -166,8 +224,8 @@ def annotate_pdf(
     redact_zones: list[dict[str, Any]],
     cover_title: str | None,
     cover_lines: list[str],
-    appendix_title: str | None = None,
-    appendix_blocks: list[dict[str, Any]] | None = None,
+    sheet_title: str | None = None,
+    sheet_blocks: list[dict[str, Any]] | None = None,
 ) -> bytes:
     doc = fitz.open(str(pdf_path))
     try:
@@ -186,8 +244,17 @@ def annotate_pdf(
             if 0 <= n < len(doc):
                 _draw(doc[n], op)
 
-        if cover_title:
-            first = doc[0].rect if len(doc) else fitz.paper_rect("a4")
+        first = doc[0].rect if len(doc) else fitz.paper_rect("a4")
+        if sheet_blocks:
+            # A feedback sheet in front of the script (replaces the plain summary page), the size of the script's first page
+            sheet = fitz.open()
+            try:
+                write_blocks(sheet, sheet_title or "", sheet_blocks, first.width, first.height)
+                doc.insert_pdf(sheet, start_at=0)
+            finally:
+                sheet.close()
+            _subset(doc)
+        elif cover_title:
             cover = doc.new_page(pno=0, width=first.width, height=first.height)
             y = 72.0
             cover.insert_text(fitz.Point(60, y), _latin1(cover_title), fontsize=20, fontname="hebo", color=(0.1, 0.1, 0.1))
@@ -201,12 +268,6 @@ def annotate_pdf(
                     fontname="hebo" if bold else "helv", color=(0.15, 0.15, 0.15),
                 )
                 y += 18
-
-        # Extra pages at the end (for example the AI's comments), the size of the script's first page
-        if appendix_blocks:
-            first = doc[0].rect if len(doc) else fitz.paper_rect("a4")
-            write_blocks(doc, appendix_title or "", appendix_blocks, first.width, first.height)
-            _subset(doc)
 
         return doc.tobytes(garbage=3, deflate=True)
     finally:

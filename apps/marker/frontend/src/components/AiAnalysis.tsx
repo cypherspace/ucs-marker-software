@@ -183,10 +183,10 @@ export function AiAnalysis({ examId }: { examId: string }) {
     }
   }
 
-  async function scriptPdf(scriptIdToMake: string, kind: 'ai' | 'annotated') {
+  async function scriptPdf(scriptIdToMake: string, kind: 'sheet' | 'annotated') {
     setPdfBusy(kind); setExportError(null);
     try {
-      const pdf = kind === 'ai' ? await api.aiFeedbackPdf(scriptIdToMake) : await api.annotatedPdf(scriptIdToMake, false, true);
+      const pdf = kind === 'sheet' ? await api.feedbackSheetPdf(scriptIdToMake) : await api.annotatedPdf(scriptIdToMake, false, true);
       saveBlob(new Blob([pdf.bytes as BlobPart], { type: 'application/pdf' }), pdf.filename);
     } catch (e) {
       setExportError(friendlyError(e).message);
@@ -339,11 +339,11 @@ export function AiAnalysis({ examId }: { examId: string }) {
               <button type="button" aria-label="Next script" disabled={oneIndex < 0 || oneIndex >= scripts.length - 1} onClick={() => setScriptId(scripts[oneIndex + 1].script_id)} className="rounded border border-slate-300 px-2 py-1 text-sm disabled:opacity-40">›</button>
               {oneIndex >= 0 && <span>Teachers {scripts[oneIndex].teacher_total}, AI {scripts[oneIndex].ai_total} of {scripts[oneIndex].max_total} (over the answers with both marks)</span>}
               <span className="flex-1" />
-              <Button disabled={pdfBusy !== null || !oneId} onClick={() => void scriptPdf(oneId, 'ai')} title="Only the AI's feedback and reasoning for this script">
-                {pdfBusy === 'ai' ? 'Making…' : 'AI comments (PDF)'}
+              <Button disabled={pdfBusy !== null || !oneId} onClick={() => void scriptPdf(oneId, 'sheet')} title="Marks, feedback and the teachers' notes for this script, to hand back">
+                {pdfBusy === 'sheet' ? 'Making…' : 'Feedback sheet (PDF)'}
               </Button>
-              <Button disabled={pdfBusy !== null || !oneId} onClick={() => void scriptPdf(oneId, 'annotated')} title="The whole script with the marking drawn on, and the AI's comments at the end">
-                {pdfBusy === 'annotated' ? 'Making…' : 'Script with AI comments (PDF)'}
+              <Button disabled={pdfBusy !== null || !oneId} onClick={() => void scriptPdf(oneId, 'annotated')} title="The whole script with the marking drawn on and a feedback cover sheet in front">
+                {pdfBusy === 'annotated' ? 'Making…' : 'Script with cover sheet (PDF)'}
               </Button>
             </div>
             <AnswerList rows={data.rows.filter((r) => r.script_id === oneId)} showScript={false} />

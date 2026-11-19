@@ -4,6 +4,7 @@ import { api } from '../api';
 import { Button, Card, ProgressBar } from './ui';
 import { Collapsible } from './Collapsible';
 import { AiAnalysis } from './AiAnalysis';
+import { ClassFeedbackSummary } from './ClassFeedback';
 import { useBatchRunner } from '../hooks/useBatchRunner';
 import { describeRun } from '../lib/duration';
 import { AiRunNotice } from './AiRunNotice';
@@ -53,7 +54,7 @@ export function AiExamWorkspace({ examId, initialQuestion }: { examId: string; i
   const [onlyDisagreements, setOnlyDisagreements] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   // Sections opened or closed by hand; otherwise they follow what is on the page (see `runOpen` / `compareOpen`)
-  const [openBy, setOpenBy] = useState<{ run?: boolean; compare?: boolean; analysis?: boolean }>({});
+  const [openBy, setOpenBy] = useState<{ run?: boolean; compare?: boolean; analysis?: boolean; classes?: boolean }>({});
   const batchSize = aiQ.data?.data.batch_size ?? 5; // answers per Gemini request
   const runner = useBatchRunner(aiQ.data?.data.step_size ?? batchSize); // answers per step (several requests at once)
 
@@ -138,7 +139,10 @@ export function AiExamWorkspace({ examId, initialQuestion }: { examId: string; i
   // Sections: choosing and running is folded once the AI has marked something; the comparison is folded until then.
   // A run in progress, or a plan waiting for a go-ahead, keeps the first one open.
   const runOpen = openBy.run ?? (!hasAi || running || Boolean(plan) || planMut.isError);
-  const analysisOpen = openBy.analysis ?? hasAi;
+  // The class summary needs marks, not necessarily the AI's; the AI-versus-teachers analysis is folded until asked for
+  const anyMarks = [...progressByQ.values()].some((p) => p.marked_clips + p.ai_marked_clips > 0);
+  const classesOpen = openBy.classes ?? anyMarks;
+  const analysisOpen = openBy.analysis ?? false;
   const compareOpen = openBy.compare ?? false;
 
   const viewIndex = withAi.findIndex((q) => q.id === viewQuestionId);
@@ -172,7 +176,7 @@ export function AiExamWorkspace({ examId, initialQuestion }: { examId: string; i
           {runner.state.status === 'done' && (
             <p className="text-sm text-green-700">
               Finished: {runner.state.done} done{runner.state.failed.length > 0 && `, ${runner.state.failed.length} failed (details above). Run it again to retry them`}.
-              <button className="ml-2 text-indigo-600 underline" onClick={() => { runner.reset(); refresh(); setOpenBy((o) => ({ ...o, analysis: true })); }}>Show results</button>
+              <button className="ml-2 text-indigo-600 underline" onClick={() => { runner.reset(); refresh(); setOpenBy((o) => ({ ...o, analysis: true, classes: true })); }}>Show results</button>
             </p>
           )}
         </div>
@@ -347,7 +351,16 @@ export function AiExamWorkspace({ examId, initialQuestion }: { examId: string; i
       </Collapsible>
 
       <Collapsible
-        title="Summary and analysis"
+        title="Class feedback summary"
+        open={classesOpen}
+        onToggle={() => setOpenBy((o) => ({ ...o, classes: !classesOpen }))}
+        summary={anyMarks ? 'Class strengths and weaknesses across the paper, with charts, and a PDF report' : 'Available once some answers are marked'}
+      >
+        {!anyMarks ? <p className="text-sm text-slate-500">Nothing has been marked yet.</p> : <ClassFeedbackSummary examId={examId} />}
+      </Collapsible>
+
+      <Collapsible
+        title="Summary and analysis (AI against teachers)"
         open={analysisOpen}
         onToggle={() => setOpenBy((o) => ({ ...o, analysis: !analysisOpen }))}
         summary={hasAi ? 'How closely the AI agrees with the teachers, and why it differs' : 'Available once the AI has marked some answers'}

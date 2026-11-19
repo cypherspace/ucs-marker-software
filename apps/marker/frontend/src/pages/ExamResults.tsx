@@ -3,7 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useOutletContext, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { AnnotatedExport } from '../components/AnnotatedExport';
-import { Button, Card } from '../components/ui';
+import { AppLink, Button, Card } from '../components/ui';
 import { saveBlob } from '../lib/saveFile';
 import { HEAD, TableBox } from '../components/DataTable';
 import type { Exam, MarkCombine } from '@marker/shared-types';
@@ -35,18 +35,18 @@ export function ExamResults() {
   const [cls, setCls] = useState<ClassChoice>(undefined);
   const [msg, setMsg] = useState<string | null>(null);
   const [pdfNames, setPdfNames] = useState(false);
-  const [pdfAi, setPdfAi] = useState(false);
+  const [pdfCover, setPdfCover] = useState(false);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
   // Click a column heading to sort by it; click again to reverse
   const [sortKey, setSortKey] = useState<string>('student');
   const [sortDesc, setSortDesc] = useState(false);
   const sortBy = (key: string) => { if (key === sortKey) setSortDesc((d) => !d); else { setSortKey(key); setSortDesc(key !== 'student'); } };
 
-  // kind 'ai': only the AI's comments and feedback for this script
-  async function downloadPdf(scriptId: string, kind: 'annotated' | 'ai' = 'annotated') {
+  // kind 'sheet': only the feedback sheet for this script, to hand back
+  async function downloadPdf(scriptId: string, kind: 'annotated' | 'sheet' = 'annotated') {
     setPdfBusy(`${kind}:${scriptId}`); setMsg(null);
     try {
-      const pdf = kind === 'ai' ? await api.aiFeedbackPdf(scriptId) : await api.annotatedPdf(scriptId, pdfNames, pdfAi);
+      const pdf = kind === 'sheet' ? await api.feedbackSheetPdf(scriptId, pdfNames) : await api.annotatedPdf(scriptId, pdfNames, pdfCover);
       saveBlob(new Blob([pdf.bytes as BlobPart], { type: 'application/pdf' }), pdf.filename);
     } catch (e) { setMsg((e as Error).message); } finally { setPdfBusy(null); }
   }
@@ -171,7 +171,12 @@ export function ExamResults() {
         </div>
       </div>
       {msg && <p role="status" className="mb-4 text-sm text-slate-600">{msg}</p>}
-      {isLead && r.rows.length > 0 && <AnnotatedExport examId={id!} classGroup={cls} names={pdfNames} onNames={setPdfNames} ai={pdfAi} onAi={setPdfAi} />}
+      {isLead && r.rows.length > 0 && (
+        <p className="mb-2 text-sm text-slate-600">
+          How did the class do overall? <AppLink to={`/marking/ai?exam=${id}`} className="font-medium text-indigo-600 hover:underline">Class feedback summary</AppLink>: strengths and weaknesses across the paper, with charts and a PDF report.
+        </p>
+      )}
+      {isLead && r.rows.length > 0 && <AnnotatedExport examId={id!} classGroup={cls} names={pdfNames} onNames={setPdfNames} cover={pdfCover} onCover={setPdfCover} />}
 
       {r.rows.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-slate-500">
@@ -254,7 +259,7 @@ export function ExamResults() {
                             type="button"
                             disabled={pdfBusy !== null}
                             onClick={() => void downloadPdf(row.script_id)}
-                            title={pdfAi ? 'Download this script as a PDF with the marking drawn on and the AI\'s comments at the end' : 'Download this script as a PDF with the marking drawn on'}
+                            title={pdfCover ? 'Download this script with the marking drawn on and a feedback cover sheet in front' : 'Download this script as a PDF with the marking drawn on'}
                             className="rounded px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
                           >
                             {pdfBusy === `annotated:${row.script_id}` ? 'Making…' : 'PDF'}
@@ -262,11 +267,11 @@ export function ExamResults() {
                           <button
                             type="button"
                             disabled={pdfBusy !== null}
-                            onClick={() => void downloadPdf(row.script_id, 'ai')}
-                            title="Download only the AI's comments and feedback for this script"
+                            onClick={() => void downloadPdf(row.script_id, 'sheet')}
+                            title="Download the feedback sheet for this script: marks, feedback and the teachers' notes, to hand back"
                             className="rounded px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
                           >
-                            {pdfBusy === `ai:${row.script_id}` ? 'Making…' : 'AI comments'}
+                            {pdfBusy === `sheet:${row.script_id}` ? 'Making…' : 'Feedback'}
                           </button>
                         </td>
                       )}

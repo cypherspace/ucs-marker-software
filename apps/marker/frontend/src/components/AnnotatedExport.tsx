@@ -6,17 +6,17 @@ import { saveBlob } from '../lib/saveFile';
 
 // "Download every script" as a zip of annotated PDFs, fetched one at a time (a whole class is too much for one request).
 // Lead teacher or admin only. `classGroup`: undefined = every script, null = scripts with no class, a string = that class.
-export function AnnotatedExport({ examId, classGroup, names, onNames, ai, onAi }: {
+export function AnnotatedExport({ examId, classGroup, names, onNames, cover, onCover }: {
   examId: string; classGroup: string | null | undefined; names: boolean; onNames: (v: boolean) => void;
-  /** Add the AI's comments and feedback as pages at the end of each PDF */
-  ai: boolean; onAi: (v: boolean) => void;
+  /** Put a feedback sheet (marks, feedback, teachers' notes) in front of each script, instead of the plain summary page */
+  cover: boolean; onCover: (v: boolean) => void;
 }) {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const cancel = useRef(false);
 
-  // kind 'annotated': every script with the marking drawn on. kind 'ai': only the AI's comments and feedback, one PDF per script.
-  async function run(kind: 'annotated' | 'ai') {
+  // kind 'annotated': every script with the marking drawn on. kind 'sheet': only the feedback sheet, one PDF per script.
+  async function run(kind: 'annotated' | 'sheet') {
     setMessage(null);
     cancel.current = false;
     try {
@@ -28,34 +28,27 @@ export function AnnotatedExport({ examId, classGroup, names, onNames, ai, onAi }
       const parts: Uint8Array[] = [];
       const zip = new Zip((err, chunk) => { if (!err) parts.push(chunk); });
       const failed: string[] = [];
-      let noComments = 0;
-      let done = 0;
+            let done = 0;
       setProgress({ done, total: scripts.length });
       for (const s of scripts) {
         if (cancel.current) break;
         try {
-          const pdf = kind === 'ai' ? await api.aiFeedbackPdf(s.id) : await api.annotatedPdf(s.id, names, ai);
+          const pdf = kind === 'sheet' ? await api.feedbackSheetPdf(s.id, names) : await api.annotatedPdf(s.id, names, cover);
           const entry = new ZipPassThrough(pdf.filename); // PDFs are already compressed
           zip.add(entry);
           entry.push(pdf.bytes, true);
         } catch (e) {
-          if (kind === 'ai' && (e as { code?: string }).code === 'NO_AI_FEEDBACK') noComments += 1;
-          else failed.push(`${s.student_number}: ${(e as Error).message}`);
+          failed.push(`${s.student_number}: ${(e as Error).message}`);
         }
         setProgress({ done: ++done, total: scripts.length });
       }
       zip.end();
       if (cancel.current) { setMessage('Cancelled.'); return; }
-      if (noComments === scripts.length) { setMessage('The AI has not commented on any of these scripts yet.'); return; }
-      if (failed.length + noComments === scripts.length) { setMessage(`No script could be exported. ${failed[0]}`); return; }
-      const label = `${plan.exam_name.replace(/[^\w .-]+/g, '').trim() || 'Exam'} - ${kind === 'ai' ? 'AI comments and feedback' : 'annotated scripts'}`;
+      if (failed.length === scripts.length) { setMessage(`No script could be exported. ${failed[0]}`); return; }
+      const label = `${plan.exam_name.replace(/[^\w .-]+/g, '').trim() || 'Exam'} - ${kind === 'sheet' ? 'feedback sheets' : cover ? 'scripts with feedback' : 'annotated scripts'}`;
       saveBlob(new Blob(parts as BlobPart[], { type: 'application/zip' }), `${label}.zip`);
-      const made = scripts.length - failed.length - noComments;
-      setMessage(
-        `Downloaded ${made} script${made === 1 ? '' : 's'}.`
-        + (noComments ? ` ${noComments} had no AI comments.` : '')
-        + (failed.length ? ` Could not make: ${failed.join('; ')}` : ''),
-      );
+      const made = scripts.length - failed.length;
+      setMessage(`Downloaded ${made} script${made === 1 ? '' : 's'}.${failed.length ? ` Could not make: ${failed.join('; ')}` : ''}`);
     } catch (e) {
       setMessage((e as Error).message);
     } finally {
@@ -69,16 +62,16 @@ export function AnnotatedExport({ examId, classGroup, names, onNames, ai, onAi }
         <div className="min-w-0 flex-1">
           <div className="font-medium text-slate-800">Annotated scripts</div>
           <p className="text-xs text-slate-500">
-            The whole script as a PDF with each teacher's ticks, notes and marks drawn on, plus a summary page, and optionally the AI's comments and feedback at the end. Use the buttons on a row for one script.
+            The whole script as a PDF with each teacher's ticks, notes and marks drawn on, plus a summary page. Tick "Feedback cover sheet" to put the marks, feedback and teachers' notes in front instead, ready to hand back. Use the buttons on a row for one script.
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-700">
           <input type="checkbox" checked={names} onChange={(e) => onNames(e.target.checked)} disabled={progress !== null} />
           Include student names
         </label>
-        <label className="flex items-center gap-2 text-sm text-slate-700" title="Adds the AI's feedback and reasoning for each answer as pages at the end of each PDF">
-          <input type="checkbox" checked={ai} onChange={(e) => onAi(e.target.checked)} disabled={progress !== null} />
-          Add the AI's comments
+        <label className="flex items-center gap-2 text-sm text-slate-700" title="A cover sheet in front of each script with the marks per question, the feedback and the teachers' notes">
+          <input type="checkbox" checked={cover} onChange={(e) => onCover(e.target.checked)} disabled={progress !== null} />
+          Feedback cover sheet
         </label>
         {progress ? (
           <>
@@ -87,7 +80,7 @@ export function AnnotatedExport({ examId, classGroup, names, onNames, ai, onAi }
           </>
         ) : (
           <>
-            <Button onClick={() => void run('ai')} title="One PDF per script with only the AI's feedback and reasoning (script numbers, no names)">AI comments only (zip)</Button>
+            <Button onClick={() => void run('sheet')} title="One short PDF per script to hand back: marks per question, feedback and the teachers' notes">Feedback sheets only (zip)</Button>
             <Button variant="primary" onClick={() => void run('annotated')}>Download all (zip)</Button>
           </>
         )}

@@ -2,7 +2,7 @@ import type {
   ApiSuccess, AssignedQuestion, AuthMe, Exam, ExamDeletePreview, ExamQuestion, ExamResults, StudentScript, ScriptClip,
   ScriptMark, AnnotationData, MarkingAssignment, ExamProgress, ComparativePair, HomeSummary,
   AdminUser, AdminInvite, AuditEntry, OverviewExam, TeacherOption,
-  AiComparison, QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
+  AiComparison, ClassFeedback, ClassOverall, ClassThemes, QueueClip, AiPlan, AiStepResult, AiResults, AiSettings, AiScopeType,
   ComparativeStatus, ComparativeNextPair, Ranking, ClipSettings, ClipRegion, NameZone, ClipListItem,
   MarkCombine, QuestionAgreement, OverlayData, OverlayListItem,
   PracticeSetSummary, PracticeSetDetail, PracticeResults, StudentSetListItem, StudentSetView, StudentItemView, PracticeReveal, StudentSummary,
@@ -39,8 +39,8 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
 const A = '/api/v1';
 
 // A PDF the server makes on request, with the file name it suggests
-async function fetchPdf(url: string): Promise<{ bytes: Uint8Array; filename: string }> {
-  const res = await fetch(url, { credentials: 'include' });
+async function fetchPdf(url: string, init: RequestInit = {}): Promise<{ bytes: Uint8Array; filename: string }> {
+  const res = await fetch(url, { credentials: 'include', ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     if (res.status === 401) window.dispatchEvent(new CustomEvent('marker:unauthorized'));
@@ -51,6 +51,12 @@ async function fetchPdf(url: string): Promise<{ bytes: Uint8Array; filename: str
   const plain = /filename="([^"]+)"/i.exec(disp);
   return { bytes: new Uint8Array(await res.arrayBuffer()), filename: star ? decodeURIComponent(star[1]) : plain?.[1] ?? 'script.pdf' };
 }
+
+export interface ClassScope { classGroup?: string | null; combine?: MarkCombine }
+const scopeBody = (f: ClassScope) => ({
+  ...(f.classGroup === null ? { no_class: true } : f.classGroup ? { class: f.classGroup } : {}),
+  ...(f.combine ? { combine: f.combine } : {}),
+});
 
 export interface AiComparisonFilters {
   combine?: MarkCombine;
@@ -372,10 +378,11 @@ export const api = {
   // Annotated scripts (lead teacher / admin): the original PDF with the marking drawn on
   annotatedScripts: (examId: string) =>
     http<ApiSuccess<{ exam_name: string; scripts: { id: string; student_number: string; class_group: string | null; clips: number }[] }>>(`${A}/exams/${examId}/annotated-scripts`),
-  annotatedPdf: (scriptId: string, names: boolean, withAi = false) =>
-    fetchPdf(`${A}/scripts/${scriptId}/annotated.pdf${names || withAi ? `?${[names && 'names=1', withAi && 'ai=1'].filter(Boolean).join('&')}` : ''}`),
-  // Only the AI's comments and feedback for one script (404 NO_AI_FEEDBACK when it has made none)
-  aiFeedbackPdf: (scriptId: string) => fetchPdf(`${A}/scripts/${scriptId}/ai-feedback.pdf`),
+  // cover: put the feedback sheet (marks, feedback, teachers' notes) in front of the script instead of the plain summary page
+  annotatedPdf: (scriptId: string, names: boolean, cover = false) =>
+    fetchPdf(`${A}/scripts/${scriptId}/annotated.pdf${names || cover ? `?${[names && 'names=1', cover && 'cover=1'].filter(Boolean).join('&')}` : ''}`),
+  // The feedback sheet on its own, to hand back (script number only unless names)
+  feedbackSheetPdf: (scriptId: string, names = false) => fetchPdf(`${A}/scripts/${scriptId}/feedback-sheet.pdf${names ? '?names=1' : ''}`),
 
   // Tracing-paper overlays (any teacher who may work on the question)
   listOverlays: (examId: string) => http<ApiSuccess<OverlayListItem[]>>(`${A}/exams/${examId}/overlays`),
@@ -402,6 +409,28 @@ export const api = {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ...settings, guidance: settings.guidance || undefined, clip_ids: clipIds }),
+    }),
+  // What the whole paper says about the class: figures, AI-written themes (a few questions per step) and the report as a PDF
+  classFeedback: (examId: string, f: ClassScope = {}) => {
+    const q = new URLSearchParams();
+    if (f.classGroup === null) q.set('no_class', '1'); else if (f.classGroup) q.set('class', f.classGroup);
+    if (f.combine) q.set('combine', f.combine);
+    return http<ApiSuccess<ClassFeedback>>(`${A}/exams/${examId}/class-feedback${q.toString() ? `?${q}` : ''}`);
+  },
+  classThemesStep: (examId: string, questionIds: string[], f: ClassScope = {}) =>
+    http<ApiSuccess<{ results: ({ question_id: string; ok: boolean; skipped?: string; error?: string; code?: string; retryable?: boolean; fatal?: boolean; retry_after_seconds?: number } & Partial<ClassThemes>)[] }>>(
+      `${A}/exams/${examId}/class-feedback/themes`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...scopeBody(f), question_ids: questionIds }) },
+    ),
+  classOverall: (examId: string, themes: { question_id: string; strengths: string[]; weaknesses: string[] }[], f: ClassScope = {}) =>
+    http<ApiSuccess<ClassOverall>>(
+      `${A}/exams/${examId}/class-feedback/overall`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...scopeBody(f), themes }) },
+    ),
+  classReportPdf: (examId: string, f: ClassScope, themes?: { question_id: string; strengths: string[]; weaknesses: string[] }[], overall?: ClassOverall | null) =>
+    fetchPdf(`${A}/exams/${examId}/class-feedback/report.pdf`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...scopeBody(f), ...(themes?.length ? { themes } : {}), ...(overall ? { overall } : {}) }),
     }),
   // How the AI's marks compare with the teachers' (lead teacher / admin). `classGroup`: a name, null for no class, undefined for all.
   aiComparison: (examId: string, f: AiComparisonFilters = {}) =>
