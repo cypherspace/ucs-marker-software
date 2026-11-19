@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.js';
+import { shownEmail, shownName } from '../services/hiddenStaff.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireQuestionAccess } from '../services/access.js';
 import { agreementState, combineMarks, meanOf, spreadOf, type TeacherMark } from '../services/markCombine.js';
@@ -29,7 +30,7 @@ router.get('/exams/:examId/questions/:questionId/agreement', requireAuth, async 
       .select<{
         clip_id: string; student_number: string; marker_id: string | null; email: string | null; name: string | null;
         marks_awarded: number; marked_at: string | null; status: string;
-      }[]>('sc.id as clip_id', 'ss.student_number', 'sm.marker_id', 'u.email', 'u.name', 'sm.marks_awarded', 'sm.marked_at', 'sm.status');
+      }[]>('sc.id as clip_id', 'ss.student_number', 'sm.marker_id', db.raw(`${shownEmail()} AS email`), db.raw(`${shownName()} AS name`), 'sm.marks_awarded', 'sm.marked_at', 'sm.status');
 
     const byClip = new Map<string, AgreementClip>();
     const teachers = new Map<string, { teacher_id: string; email: string; name: string | null; marked: number }>();
