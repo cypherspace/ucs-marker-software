@@ -20,7 +20,6 @@ import { AiMarkingOverview, ComparativeOverview, MarkingLayout, MyMarking } from
 import { MarkingInterface } from './pages/MarkingInterface';
 import { ComparativeMarking } from './pages/ComparativeMarking';
 import { ComparativeRanking } from './pages/ComparativeRanking';
-import { AiMarking } from './pages/AiMarking';
 import { StudentHome } from './pages/practice/StudentHome';
 import { PracticeSets } from './pages/PracticeSets';
 import { PracticeSetDetail } from './pages/PracticeSetDetail';
@@ -121,7 +120,7 @@ export function App() {
             <Route path="ai" element={<AiMarkingOverview />} />
             <Route path="comparative" element={<ComparativeOverview />} />
           </Route>
-          <Route path="/marking/ai/:id" element={<AiMarking />} />
+          <Route path="/marking/ai/:id" element={<RedirectTo to={(p, search) => `/marking/ai?exam=${p.id}${search.replace(/^\?/, '&')}`} />} />
           <Route path="/exams" element={<ExamList />} />
           <Route path="/exams/new" element={<CreateExam />} />
           <Route path="/practice-sets/:setId" element={<PracticeSetDetail />} />
@@ -149,10 +148,10 @@ export function App() {
 }
 
 // Send an old address to its new home, keeping the remembered "came from" page
-function RedirectTo({ to }: { to: (params: Record<string, string | undefined>) => string }) {
+function RedirectTo({ to }: { to: (params: Record<string, string | undefined>, search: string) => string }) {
   const params = useParams();
   const loc = useLocation();
-  return <Navigate to={to(params)} replace state={loc.state} />;
+  return <Navigate to={to(params, loc.search)} replace state={loc.state} />;
 }
 
 // The staff bar needs to know whether this person leads any exam (for AI marking) and whether comparative marking applies to them

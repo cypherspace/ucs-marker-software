@@ -46,7 +46,7 @@ export function ExamProgress() {
             </select>
           </label>
           <LinkButton to={`/exams/${id}/results`} variant="secondary">Results and export</LinkButton>
-          {isLead && <LinkButton to={`/marking/ai/${id}`} variant="secondary">AI marking</LinkButton>}
+          {isLead && <LinkButton to={`/marking/ai?exam=${id}`} variant="secondary">AI marking</LinkButton>}
         </div>
       </div>
 
