@@ -101,7 +101,21 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "marker-sa@ucs-
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "marker-sa@ucs-marking-software.iam";
 ```
 
-Applied to production: 001 to 015 (015 hidden_staff on 2026-11-22, by the owner in Cloud SQL Studio before PR #41 was merged, then `UPDATE users SET hidden = true` for the owner's personal account; 014 overlay_data on 2026-11-17, by the owner in Cloud SQL Studio, with the `pgmigrations` row; 005, 006 and 007 on 2026-10-07, each after an on-demand backup; note 006 also deleted duplicate AI mark rows, keeping the newest per clip; 008, 009 and 010 were applied on 2026-10-09; 011 mark_combine, 012 student role and 013 practice marking on 2026-11-13, after an on-demand backup, just before PR #22 was merged). **Apply a new migration to production BEFORE merging the PR whose code needs it**, because the deploy happens on merge and the new code would query columns that do not exist yet (migrations here are additive, so the old code keeps working once they are applied). The whole procedure (backup, temporary `postgres` password, tunnel, `migrate up`, the `GRANT` statements above so `marker-sa` can use new tables and columns) is scripted in `infra/db/marker/migrate-cloudsql.mjs`; read its header for the exact PowerShell steps. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
+Applied to production: 001 to 015 (015 hidden_staff on 2026-11-22, by the owner in Cloud SQL Studio before PR #41 was merged, then `UPDATE users SET hidden = true` for the owner's personal account; 014 overlay_data on 2026-11-17, by the owner in Cloud SQL Studio, with the `pgmigrations` row; 005, 006 and 007 on 2026-10-07, each after an on-demand backup; note 006 also deleted duplicate AI mark rows, keeping the newest per clip; 008, 009 and 010 were applied on 2026-10-09; 011 mark_combine, 012 student role and 013 practice marking on 2026-11-13, after an on-demand backup, just before PR #22 was merged). **Apply a new migration to production BEFORE merging the PR whose code needs it**, because the deploy happens on merge and the new code would query columns that do not exist yet (migrations here are additive, so the old code keeps working once they are applied). The whole procedure (a manual backup taken with `infra/db/marker/db-checkpoint.ps1`, see Backups below; temporary `postgres` password, tunnel, `migrate up`, the `GRANT` statements above so `marker-sa` can use new tables and columns) is scripted in `infra/db/marker/migrate-cloudsql.mjs`; read its header for the exact PowerShell steps. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
+
+### Backups
+
+`marker-postgres` holds student data, so it has two kinds of backup (both stored in `europe-west2`):
+
+- **Automated, daily** at 02:00 UTC, enabled 2026-11-22. Cloud SQL keeps the newest **5** and deletes older ones itself (instance setting `retained-backups-count=5`). These cover the last 5 days if a bad change goes unnoticed.
+- **Manual (on-demand)**, taken before any risky change (a migration, a data fix, anything that could be wrong without anyone noticing). Keep the newest **3**. Cloud SQL never deletes on-demand backups and has no setting to limit them, so use `infra/db/marker/db-checkpoint.ps1`, which takes the backup, waits for it to succeed and only then deletes manual backups beyond the newest 3 (the oldest goes when a new one is made). It never touches the automated ones:
+
+```powershell
+.\infra\db\marker\db-checkpoint.ps1 -Description "Before migration 16"
+.\infra\db\marker\db-checkpoint.ps1 -PruneOnly -WhatIf   # list what would be deleted, delete nothing
+```
+
+A plain `gcloud sql backups create` still works but does not prune, so manual backups pile up. Deleting a backup cannot be undone, so never delete backups by hand without the owner's go-ahead, and restoring a backup overwrites the live database, so it needs the owner's explicit go-ahead too.
 
 ### Secrets gotcha
 

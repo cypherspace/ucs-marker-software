@@ -6,7 +6,9 @@
 // wants an ordinary DATABASE_URL. This forwards a local TCP port through the connector.
 //
 // Usage (PowerShell, from the repo root, after `gcloud auth application-default login`):
-//   1. Back up:   gcloud sql backups create --instance=marker-postgres --project=ucs-marking-software
+//   1. Back up:   .\infra\db\marker\db-checkpoint.ps1 -Description "Before migration NN"
+//                 (takes a manual backup and keeps only the newest 3; a plain
+//                 `gcloud sql backups create` works too but never prunes old ones)
 //   2. Set a temporary password on the built-in admin user (the app itself uses IAM, not a password):
 //        $pw = <random value>
 //        gcloud sql users set-password postgres --instance=marker-postgres --project=ucs-marking-software --password=$pw
