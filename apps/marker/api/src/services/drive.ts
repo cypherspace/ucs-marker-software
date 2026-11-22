@@ -240,6 +240,25 @@ export async function folderState(userId: string, folderId: string): Promise<'ok
   });
 }
 
+/**
+ * What Drive itself holds for a file: its size and the MD5 checksum Drive worked out from the stored bytes (null when Drive
+ * does not give one). Used to check an upload by asking Drive, not by trusting our own copy.
+ */
+export async function fileChecksum(
+  userId: string, fileId: string,
+): Promise<{ size: number | null; md5: string | null; trashed: boolean }> {
+  return viaDrive(userId, async () => {
+    const auth = await getOAuth2Client(userId);
+    const drive = google.drive({ version: 'v3', auth });
+    const res = await drive.files.get({ fileId, fields: 'id,size,md5Checksum,trashed' });
+    return {
+      size: res.data.size ? Number(res.data.size) : null,
+      md5: res.data.md5Checksum ?? null,
+      trashed: !!res.data.trashed,
+    };
+  });
+}
+
 /** Download a file from Drive. Returns raw bytes. */
 export async function downloadFile(userId: string, fileId: string): Promise<Buffer> {
   return viaDrive(userId, async () => {
