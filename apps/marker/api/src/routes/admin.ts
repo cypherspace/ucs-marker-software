@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import type { Knex } from 'knex';
 import { z } from 'zod';
 import { db } from '../db.js';
+import { shownEmail, shownName } from '../services/hiddenStaff.js';
 import { config } from '../config.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { recordAudit } from '../services/audit.js';
@@ -82,10 +83,11 @@ router.get('/users', async (_req, res, next) => {
         db.raw('(SELECT COUNT(*)::int FROM exams e WHERE e.lead_teacher_id = u.id) AS leads_exams'),
       )
       .modify((qb) => { if (!config.authDisabled) qb.whereNot('u.id', config.adminUserId); })
+      .where('u.hidden', false)
       .orderBy('u.email');
     const invites = await db('allowed_emails as a')
       .leftJoin('users as u', 'u.id', 'a.added_by')
-      .select('a.email', 'a.role', 'a.created_at', 'u.email as added_by_email')
+      .select('a.email', 'a.role', 'a.created_at', db.raw(`${shownEmail()} AS added_by_email`))
       .orderBy('a.email');
     res.json({ data: { users, invites } });
   } catch (err) {
@@ -199,7 +201,7 @@ router.get('/audit', async (req, res, next) => {
     }).parse(req.query);
     const rows = await db('audit_log as a')
       .leftJoin('users as u', 'u.id', 'a.actor_id')
-      .select('a.id', 'a.action', 'a.target_type', 'a.target_id', 'a.metadata', 'a.created_at', 'u.email as actor_email')
+      .select('a.id', 'a.action', 'a.target_type', 'a.target_id', 'a.metadata', 'a.created_at', db.raw(`${shownEmail()} AS actor_email`))
       .modify((qb) => { if (q.before) qb.where('a.created_at', '<', q.before); })
       .orderBy('a.created_at', 'desc')
       .limit(q.limit + 1);
@@ -244,7 +246,7 @@ router.post('/maintenance/clip-copies', async (req, res, next) => {
 router.get('/overview', async (_req, res, next) => {
   try {
     const exams = (await db.raw(
-      `SELECT e.id AS exam_id, e.name, e.status, u.email AS lead_email,
+      `SELECT e.id AS exam_id, e.name, e.status, ${shownEmail()} AS lead_email,
               COALESCE(c.clips_total, 0) AS clips_total, COALESCE(c.clips_marked, 0) AS clips_marked
          FROM exams e
          LEFT JOIN users u ON u.id = e.lead_teacher_id
@@ -261,7 +263,7 @@ router.get('/overview', async (_req, res, next) => {
     )).rows as { exam_id: string; name: string; status: string; lead_email: string | null; clips_total: string; clips_marked: string }[];
 
     const teachers = (await db.raw(
-      `SELECT ma.exam_id, ma.teacher_id, u.email,
+      `SELECT ma.exam_id, ma.teacher_id, ${shownEmail()} AS email,
               COUNT(sc.id) AS clips_assigned,
               COUNT(sm.id) AS clips_marked,
               MAX(sm.marked_at) AS last_marked_at
@@ -269,8 +271,8 @@ router.get('/overview', async (_req, res, next) => {
          JOIN users u ON u.id = ma.teacher_id
          LEFT JOIN script_clips sc ON sc.question_id = ma.question_id
          LEFT JOIN script_marks sm ON sm.clip_id = sc.id AND sm.marker_id = ma.teacher_id AND sm.status <> 'pending'
-        GROUP BY ma.exam_id, ma.teacher_id, u.email
-        ORDER BY u.email`,
+        GROUP BY ma.exam_id, ma.teacher_id, u.email, u.hidden
+        ORDER BY 3`,
     )).rows as { exam_id: string; teacher_id: string; email: string; clips_assigned: string; clips_marked: string; last_marked_at: Date | null }[];
 
     const byExam = new Map<string, typeof teachers>();

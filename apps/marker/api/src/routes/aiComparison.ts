@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
+import { shownEmail, shownName } from '../services/hiddenStaff.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireExamMember } from '../services/access.js';
 import { recordAudit } from '../services/audit.js';
@@ -52,7 +53,7 @@ async function loadRows(examId: string, defaultCombine: MarkCombine, q: z.infer<
     .where('eq.exam_id', examId).where('sm.mark_source', 'human')
     .where('sm.status', '<>', 'pending').whereNotNull('sm.marks_awarded')
     .select<{ clip_id: string; marker_id: string | null; name: string | null; email: string | null; marks_awarded: number; annotation_data: unknown }[]>(
-      'sm.clip_id', 'sm.marker_id', 'u.name', 'u.email', 'sm.marks_awarded', 'sm.annotation_data',
+      'sm.clip_id', 'sm.marker_id', db.raw(`${shownName()} AS name`), db.raw(`${shownEmail()} AS email`), 'sm.marks_awarded', 'sm.annotation_data',
     );
   const byClip = new Map<string, TeacherEntry[]>();
   for (const h of humans) {

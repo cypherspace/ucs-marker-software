@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { requireExamMember } from '../services/access.js';
 import { isMarkCombine, type MarkCombine } from '../services/markCombine.js';
 import { db } from '../db.js';
+import { shownEmail, shownName } from '../services/hiddenStaff.js';
 import { computeRanking } from '../services/rankingData.js';
 import { classFilterFrom, loadResultRows, scopeFor, type ResultRow } from '../services/results.js';
 import { buildResultsTable } from '../services/resultsTable.js';
@@ -82,7 +83,7 @@ router.get('/exams/:id/export', requireAuth, requireRole(['teacher', 'admin']), 
         const found = await db('script_marks as sm').join('users as u', 'u.id', 'sm.marker_id')
           .whereIn('sm.clip_id', rows.map((r) => r.clip_id))
           .where({ 'sm.mark_source': 'human' }).whereNot('sm.status', 'pending').whereNotNull('sm.marks_awarded')
-          .select<{ clip_id: string; marker_id: string; email: string; marks_awarded: number }[]>('sm.clip_id', 'sm.marker_id', 'u.email', 'sm.marks_awarded');
+          .select<{ clip_id: string; marker_id: string; email: string; marks_awarded: number }[]>('sm.clip_id', 'sm.marker_id', db.raw(`${shownEmail()} AS email`), 'sm.marks_awarded');
         for (const f of found) {
           if (!teacherCols.some((t) => t.id === f.marker_id)) teacherCols.push({ id: f.marker_id, email: f.email });
           if (!teacherMarks.has(f.clip_id)) teacherMarks.set(f.clip_id, new Map());
