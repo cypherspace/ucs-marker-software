@@ -8,6 +8,7 @@ import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { recordAudit } from '../services/audit.js';
 import { clipTempKey } from '../services/driveCopy.js';
 import { storage } from '../services/storage.js';
+import { listBucketFiles, moveFiles, summariseBucketFiles } from '../services/bucketMove.js';
 
 const router = Router();
 router.use(requireAuth, requireRole(['admin']));
@@ -238,6 +239,45 @@ router.post('/maintenance/clip-copies', async (req, res, next) => {
     }
     if (!dry_run) await recordAudit(req, 'storage.delete_clip_copies', null, null, { checked: clips.length, deleted });
     res.json({ data: { dry_run, checked: clips.length, found, deleted } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Move old bucket files into Drive ────────────────────────────────────────
+// Files made before every exam kept its work in the lead teacher's Drive may still be in the storage bucket. This lists
+// them per exam (read-only), then moves them a few at a time, driven by the browser like a clip run (a whole class
+// would not fit in one request). Each file is checked after upload and the bucket copy is deleted only once the database
+// points at the Drive copy; a file that cannot be moved is left exactly as it was.
+router.get('/maintenance/move-to-drive', async (_req, res, next) => {
+  try {
+    const exams = await summariseBucketFiles();
+    res.json({ data: { exams, total: exams.reduce((a, e) => a + e.total, 0) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Starting a run lists the exam's files and writes one audit entry (the steps themselves are not audited one by one)
+router.post('/maintenance/move-to-drive/:examId/start', async (req, res, next) => {
+  try {
+    const examId = IdParam.parse(req.params.examId);
+    const ids = await listBucketFiles(examId);
+    await recordAudit(req, 'storage.move_to_drive_started', 'exam', examId, { files: ids.length });
+    res.json({ data: { ids } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/maintenance/move-to-drive/:examId/step', async (req, res, next) => {
+  try {
+    const examId = IdParam.parse(req.params.examId);
+    const { ids } = z.object({ ids: z.array(z.string().max(80)).min(1).max(5) }).parse(req.body);
+    const results = await moveFiles(examId, ids);
+    const moved = results.filter((r) => r.ok && !r.skipped).length;
+    const failed = results.filter((r) => !r.ok).length;
+    res.json({ data: { results, moved, failed } });
   } catch (err) {
     next(err);
   }

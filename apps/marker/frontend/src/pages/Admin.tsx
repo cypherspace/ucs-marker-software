@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ADMIN_TABS, isAdminTab, NAV, type AdminTab } from '../lib/navLabels';
 import { PageHeader } from '../components/PageHeader';
+import { MoveToDrive } from '../components/MoveToDrive';
 import { api } from '../api';
 import { AppLink, Button, Card, ProgressBar, StatusPill } from '../components/ui';
 import type { AuditEntry, OverviewExam } from '@marker/shared-types';
@@ -358,6 +359,8 @@ function StorageTab() {
   const tidy = useMutation({ mutationFn: () => api.admin.clipCopies(false), onSuccess: () => check.reset() });
   const found = check.data?.data.found;
   return (
+    <div className="space-y-4">
+    <MoveToDrive />
     <Card className="max-w-2xl space-y-3 p-4">
       <h2 className="font-medium text-slate-800">Leftover clip copies</h2>
       <p className="text-sm text-slate-600">
@@ -380,5 +383,6 @@ function StorageTab() {
       {tidy.data && <p role="status" className="text-sm text-green-700">Deleted {tidy.data.data.deleted} cop{tidy.data.data.deleted === 1 ? 'y' : 'ies'}.</p>}
       {(check.error || tidy.error) && <p role="alert" className="text-sm text-red-700">{((check.error || tidy.error) as Error).message}</p>}
     </Card>
+    </div>
   );
 }

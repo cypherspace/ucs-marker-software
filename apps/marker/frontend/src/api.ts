@@ -467,9 +467,32 @@ export const api = {
         `${ADM}/audit?limit=50${before ? `&before=${encodeURIComponent(before)}` : ''}`,
       ),
     overview: () => http<ApiSuccess<OverviewExam[]>>(`${ADM}/overview`),
+    bucketFiles: () => http<ApiSuccess<BucketFilesSummary>>(`${ADM}/maintenance/move-to-drive`),
+    startMoveToDrive: (examId: string) =>
+      http<ApiSuccess<{ ids: string[] }>>(`${ADM}/maintenance/move-to-drive/${examId}/start`, { method: 'POST' }),
+    moveToDriveStep: (examId: string, ids: string[]) =>
+      http<ApiSuccess<{ results: MoveResult[]; moved: number; failed: number }>>(`${ADM}/maintenance/move-to-drive/${examId}/step`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids }),
+      }),
     clipCopies: (dryRun: boolean) =>
       http<ApiSuccess<{ dry_run: boolean; checked: number; found: number; deleted: number }>>(`${ADM}/maintenance/clip-copies`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dry_run: dryRun }),
       }),
   },
 };
+
+// Old files still in the storage bucket, per exam (System Admin, Storage)
+export interface BucketFilesExam {
+  exam_id: string;
+  name: string;
+  status: string;
+  archived: boolean;
+  lead_email: string | null;
+  drive_connected: boolean;
+  counts: { mark_scheme_pdf: number; mark_scheme_clip: number; script_pdf: number; clip: number; converted: number };
+  total: number;
+}
+export interface BucketFilesSummary { exams: BucketFilesExam[]; total: number }
+export interface MoveResult {
+  id: string; ok: boolean; error?: string; code?: string; retryable?: boolean; fatal?: boolean; warning?: string; skipped?: boolean;
+}
