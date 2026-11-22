@@ -100,7 +100,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "marker-sa@ucs-
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "marker-sa@ucs-marking-software.iam";
 ```
 
-Applied to production: 001 to 014 (**015 hidden_staff is NOT yet applied: PR #41 waits for it, see "Pending production steps" below**; 014 overlay_data on 2026-11-17, by the owner in Cloud SQL Studio, with the `pgmigrations` row; 005, 006 and 007 on 2026-10-07, each after an on-demand backup; note 006 also deleted duplicate AI mark rows, keeping the newest per clip; 008, 009 and 010 were applied on 2026-10-09; 011 mark_combine, 012 student role and 013 practice marking on 2026-11-13, after an on-demand backup, just before PR #22 was merged). **Apply a new migration to production BEFORE merging the PR whose code needs it**, because the deploy happens on merge and the new code would query columns that do not exist yet (migrations here are additive, so the old code keeps working once they are applied). The whole procedure (backup, temporary `postgres` password, tunnel, `migrate up`, the `GRANT` statements above so `marker-sa` can use new tables and columns) is scripted in `infra/db/marker/migrate-cloudsql.mjs`; read its header for the exact PowerShell steps. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
+Applied to production: 001 to 015 (015 hidden_staff on 2026-11-22, by the owner in Cloud SQL Studio before PR #41 was merged, then `UPDATE users SET hidden = true` for the owner's personal account; 014 overlay_data on 2026-11-17, by the owner in Cloud SQL Studio, with the `pgmigrations` row; 005, 006 and 007 on 2026-10-07, each after an on-demand backup; note 006 also deleted duplicate AI mark rows, keeping the newest per clip; 008, 009 and 010 were applied on 2026-10-09; 011 mark_combine, 012 student role and 013 practice marking on 2026-11-13, after an on-demand backup, just before PR #22 was merged). **Apply a new migration to production BEFORE merging the PR whose code needs it**, because the deploy happens on merge and the new code would query columns that do not exist yet (migrations here are additive, so the old code keeps working once they are applied). The whole procedure (backup, temporary `postgres` password, tunnel, `migrate up`, the `GRANT` statements above so `marker-sa` can use new tables and columns) is scripted in `infra/db/marker/migrate-cloudsql.mjs`; read its header for the exact PowerShell steps. Changing database credentials or running migrations against production needs the user's explicit go-ahead.
 
 ### Secrets gotcha
 
@@ -112,22 +112,9 @@ Secrets created from PowerShell got a UTF-8 BOM, which broke the `TOKEN_ENCRYPTI
 - The OAuth client must list both Cloud Run URLs as redirect URIs (`<url>/auth/google/callback`) and as JavaScript origins (Drive picker).
 - Access control is the app's own `users` and `allowed_emails` tables. `ALLOW_SIGNUP` is false in production, so unknown Google accounts are rejected.
 
-### Pending production steps (015 hidden_staff, PR #41, as of 2026-11-19)
+### Production state (as of 2026-11-22)
 
-PR #41 (`users.hidden`, see the "Hidden staff" bullet) is open and **must not be merged until the migration is applied**, because the new code selects `users.hidden`. The owner runs the migration from their local session with the cloud credentials (`node infra/db/marker/migrate-cloudsql.mjs`, after an on-demand backup), or by hand in Cloud SQL Studio:
-
-```sql
-ALTER TABLE users ADD COLUMN hidden boolean NOT NULL DEFAULT false;
-INSERT INTO pgmigrations (name, run_on) VALUES ('015_hidden_staff', now());
-```
-
-The `GRANT` statements above already cover the new column for `marker-sa`. Then hide the account (the address is deliberately not written in the repo):
-
-```sql
-UPDATE users SET hidden = true WHERE email = '<address to hide>';
-```
-
-Then merge PR #41 and check after the deploy that the Teachers picker and the admin Staff list no longer show the account and that it appears as "Administrator" in assignments, progress and the activity log. To undo: `UPDATE users SET hidden = false WHERE email = '...';`. Update this section and the "Applied to production" line once done.
+Migration 015 (`users.hidden`) is applied and PR #41 is merged and deploying; the owner's personal account is set `hidden = true` (the address is deliberately not written in the repo). Still to check live by the owner after the deploy: the Teachers picker and the admin Staff list no longer show the account, and it appears as "Administrator" in assignments, progress and the activity log. To undo: `UPDATE users SET hidden = false WHERE email = '...';`.
 
 Merged since 2026-11-16 (all deployed, no migration, **not yet checked live by the owner**): PRs #35 to #40 (mark scheme read path, Drive foundation and mark scheme write path, one-page exam setup with remove scripts and the empty-PDF guard, one-page AI marking, AI-versus-teachers analysis, hand-back feedback sheets and class feedback summary). Next candidates, owner to choose: a Drive connection-health PR (needs migration 016: `users.drive_status` etc., subfolders, readable file names, "Open in Drive"), or the one-off tool that moves existing bucket scripts, clips and mark schemes into Drive (dry run, read-back verification).
 
@@ -135,7 +122,7 @@ Merged since 2026-11-16 (all deployed, no migration, **not yet checked live by t
 
 **Released 2026-11-13: PR #22** (student practice marking, per-teacher mark combining, the student access fence, and annotated script PDF export) is merged and deployed; migrations 011 to 013 are applied. It has been checked by builds, tests, an access-fence sweep and post-deploy 401/health/log checks, but **not yet by a real signed-in session** (see item 6 below).
 
-**Where things are.** The system is live on Cloud Run and a teacher can run a whole exam through it. `main` is deployed (every merge to it is; PRs #22 to #26 and the docs housekeeping PR #24 are all in), and `dev` may be behind it: fast-forward `dev` with `git merge --ff-only origin/main` when you next use it. Check the live revisions with `gcloud run revisions list --service=marker-api --region=europe-west2 --project=ucs-marking-software` (and `--service=marker-extractor`). Migrations 001 to 014 are applied.
+**Where things are.** The system is live on Cloud Run and a teacher can run a whole exam through it. `main` is deployed (every merge to it is; PRs #22 to #26 and the docs housekeeping PR #24 are all in), and `dev` may be behind it: fast-forward `dev` with `git merge --ff-only origin/main` when you next use it. Check the live revisions with `gcloud run revisions list --service=marker-api --region=europe-west2 --project=ucs-marking-software` (and `--service=marker-extractor`). Migrations 001 to 015 are applied.
 
 **Confirmed working on the live site by the user (a real signed-in session, as of 2026-10-07; nothing from the 2026-10-08 clean-up has been recorded as checked live yet):** Google sign-in, exam setup, the Drive picker and Drive-stored scripts, the region editor, drawing per-script clips for typed/scribed/incomplete scripts, Generate Clips, clip images on the marking page, Prev / Next / jump between scripts, Mark ticks (1 mark each, total fills the Marks box), ticks persisting per script, the annotation tools staying in view while scrolling a long script, and **typed text (handwriting recognition)** with the new Gemini key and model.
 
